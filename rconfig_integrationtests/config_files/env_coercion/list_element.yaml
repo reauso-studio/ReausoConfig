@@ -1,0 +1,5 @@
+_target_: env_list_element
+# Env-sourced value as a single list element of a list[int] field
+ports:
+  - '${env:RCT_PORT ?: 8080}'
+  - 9000

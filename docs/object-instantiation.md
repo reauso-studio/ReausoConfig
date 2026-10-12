@@ -182,7 +182,7 @@ ReausoConfig can automatically determine the target class for nested configs in 
 
 #### 1. Implicit Inference from Type Hints
 
-When a nested config field has a concrete type hint (a class that is registered with no subclasses), the `_target_` can be omitted and will be automatically inferred:
+When a nested config field has a concrete type hint (a class that is not abstract and has no ambiguous registered subclasses), the `_target_` can be omitted and the class is inferred from the type hint. The nested class does **not** need to be registered: it is registered automatically. Only the root target needs `rc.register()`:
 
 ```python
 @dataclass
@@ -194,8 +194,8 @@ class TrainerConfig:
     model: ModelConfig  # Concrete type - _target_ can be inferred
     epochs: int
 
-rc.register(name="model", target=ModelConfig)
 rc.register(name="trainer", target=TrainerConfig)
+# ModelConfig needs no registration - it is inferred from the type hint
 ```
 
 ```yaml

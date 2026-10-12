@@ -17,7 +17,7 @@ model:
 
 training:
   effective_batch: ${/defaults.batch_size * 4}
-  output_dir: ${env:OUTPUT_DIR,./output}  # Environment variable with default
+  output_dir: '${env:OUTPUT_DIR ?: "./output"}'  # Environment variable with default
   user_path: /data/${env:USER}/runs       # Embedded in string
 ```
 
@@ -36,11 +36,21 @@ training:
 # Required (raises error if not set)
 data_path: ${env:DATA_PATH}
 
-# With default value
-log_level: ${env:LOG_LEVEL,INFO}
-port: ${env:PORT,8080}  # Numbers are parsed
-debug: ${env:DEBUG,false}  # Booleans are parsed
+# With default value (coalesce operator; string defaults need double quotes)
+log_level: '${env:LOG_LEVEL ?: "INFO"}'
+port: '${env:PORT ?: 8080}'      # Number default; PORT=9000 becomes 9000 for an int field
+debug: '${env:DEBUG ?: false}'   # Bool default; DEBUG=true becomes True for a bool field
 ```
+
+Defaults use the [coalesce operators](#coalesce-operators) `?:` and `??`. Quote the whole value in YAML, because `?: ` would otherwise be read as YAML syntax.
+
+Environment variables are always strings. When the field has a declared type (`int`, `bool`, an enum, `list[str]`, ...), the value is converted to it after interpolation, see [Type Coercion](type-coercion.md). Fields typed `str` or without a type hint keep the string.
+
+!!! warning "Inside expressions, environment values are still strings"
+    Conversion applies to a field's final value, not inside an expression. In `${env:USE_GPU ?: false ? "cuda:0" : "cpu"}`, the value `"false"` is a non-empty string and selects `"cuda:0"`. Compare explicitly instead: `${(env:USE_GPU ?: "false") == "true" ? "cuda:0" : "cpu"}`. See [Values Inside Expressions](type-coercion.md#values-inside-expressions).
+
+!!! note "Empty variables count as unset"
+    A variable that is set but empty (`VAR=` in a `.env` file) is treated like an unset one: `${env:VAR}` raises `EnvironmentVariableError` and `${env:VAR ?: "default"}` falls back to the default.
 
 ### Expression Support
 

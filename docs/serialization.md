@@ -44,7 +44,7 @@ config = {"model": {"lr": 0.01}, "epochs": 10}
 rc.to_file(source=config, output_path=Path("output.yaml"))
 
 # Post-processing workflow
-config = rc.to_dict(path=Path("config.yaml"), cli_overrides=False)
+config = rc.to_dict(path=Path("config.yaml"))
 config["extra_key"] = "added_value"
 rc.to_file(source=config, output_path=Path("output.json"))
 

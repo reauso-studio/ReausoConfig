@@ -7,7 +7,7 @@ Python objects using registered target classes.
 import inspect
 from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any, get_args, get_origin, get_type_hints
 
 from rconfig.target import TargetRegistry
 from rconfig.validation import ConfigValidator
@@ -21,6 +21,7 @@ from rconfig._internal.type_utils import (
     extract_class_from_hint,
     extracted_container_element_type,
     is_concrete_type,
+    is_union_hint,
     register_inferred_target,
     resolved_union_candidate,
     unwrapped_hint,
@@ -328,7 +329,7 @@ class ConfigInstantiator:
         if class_type is None:
             # Try union structural matching
             unwrapped = unwrapped_hint(expected_type)
-            if get_origin(unwrapped) is Union:
+            if is_union_hint(unwrapped):
                 matched = resolved_union_candidate(unwrapped, value, self._store)
                 if matched is not None:
                     class_type = matched

@@ -1,0 +1,4 @@
+_target_: optional_model
+# Model config with an optional field
+hidden_size: 256
+seed: null

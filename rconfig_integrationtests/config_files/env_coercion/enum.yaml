@@ -1,0 +1,3 @@
+_target_: env_enum
+# Env-sourced value for a StrEnum field
+level: '${env:RCT_LEVEL ?: "INFO"}'

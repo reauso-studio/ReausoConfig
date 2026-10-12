@@ -8,10 +8,19 @@ After instantiation, you get pure Python objects with no framework dependency.
 
 ## Installation
 
-Install ReausoConfig from GitHub using pip:
+Install ReausoConfig from PyPI:
 
 ```bash
-pip install git+https://github.com/reauso/ReausoConfig.git
+pip install reausoconfig
+```
+
+!!! note "Package name vs. import name"
+    The distribution is named `ReausoConfig`, the import name is `rconfig` (`import rconfig as rc`). `pip install rconfig` installs an unrelated package.
+
+To install the latest development version from GitHub:
+
+```bash
+pip install git+https://github.com/reauso-studio/ReausoConfig.git
 ```
 
 ## Development Setup
@@ -86,6 +95,22 @@ if not result.valid:
     for error in result.errors:
         print(error)
 ```
+
+## Command-Line Overrides
+
+Reading `key=value` overrides and `--help` from `sys.argv` is off by default. Enable it at the start of a script:
+
+```python
+rc.set_cli_overrides(True)
+model = rc.instantiate(path="config.yaml", expected_type=ModelConfig)
+```
+
+```bash
+python train.py hidden_size=512   # Override a value
+python train.py --help            # List all configurable values
+```
+
+See [CLI Overrides](composition.md#cli-overrides) for the full syntax.
 
 ## Supported File Formats
 

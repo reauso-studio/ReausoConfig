@@ -18,7 +18,7 @@ timeout:
 
 Required values can be satisfied by:
 
-- CLI overrides: `api_key=secret123`
+- CLI overrides: `api_key=secret123` (when [enabled](composition.md#cli-overrides) with `rc.set_cli_overrides(True)`)
 - Programmatic overrides: `overrides={"api_key": "secret"}`
 - Environment variable interpolation: `api_key: ${env:API_KEY}`
 
@@ -457,7 +457,7 @@ production:
   _target_: app_config
   database:
     host: ${env:DATABASE_HOST}
-    port: ${env:DATABASE_PORT ?: 5432}
+    port: '${env:DATABASE_PORT ?: 5432}'  # "5433" from env becomes int 5433
   debug: false
   log_level: WARNING
 ```

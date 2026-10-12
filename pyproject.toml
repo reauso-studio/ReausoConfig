@@ -13,7 +13,7 @@ name = "ReausoConfig"
 readme = "README.md"
 license = "MIT"
 requires-python = ">= 3.11"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
     "ruamel.yaml>=0.18.7,<0.19",
     "lark>=1.1.0,<2.0",
@@ -21,9 +21,9 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://reauso.github.io/ReausoConfig/"
-Repository = "https://github.com/reauso/ReausoConfig"
-Issues = "https://github.com/reauso/ReausoConfig/issues"
+Documentation = "https://reauso-studio.github.io/ReausoConfig/"
+Repository = "https://github.com/reauso-studio/ReausoConfig"
+Issues = "https://github.com/reauso-studio/ReausoConfig/issues"
 
 [project.optional-dependencies]
 test = [

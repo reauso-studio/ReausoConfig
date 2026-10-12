@@ -19,7 +19,7 @@ class SimpleConfig:
 
 
 class InstantiateHelpTests(TestCase):
-    """Tests for help handling in rc.instantiate()."""
+    """Tests for help handling in rc.instantiate(, cli_overrides=True)."""
 
     def setUp(self) -> None:
         """Set up test fixtures."""
@@ -63,7 +63,7 @@ class InstantiateHelpTests(TestCase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.instantiate(config_path)
+            rc.instantiate(config_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -85,7 +85,7 @@ class InstantiateHelpTests(TestCase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.instantiate(config_path)
+            rc.instantiate(config_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -105,7 +105,7 @@ class InstantiateHelpTests(TestCase):
         sys.argv = ["script.py"]
 
         # Act
-        result = rc.instantiate(config_path)
+        result = rc.instantiate(config_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 0)
@@ -179,7 +179,7 @@ class SysArgvManipulationTests(TestCase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.instantiate(config_path)
+            rc.instantiate(config_path, cli_overrides=True)
 
         # Assert - --help should have been removed
         self.assertNotIn("--help", argv_during_integrate)
@@ -203,7 +203,7 @@ class SysArgvManipulationTests(TestCase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.instantiate(config_path)
+            rc.instantiate(config_path, cli_overrides=True)
 
         # Assert - -h should have been removed
         self.assertNotIn("-h", argv_during_integrate)
@@ -227,7 +227,7 @@ class SysArgvManipulationTests(TestCase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.instantiate(config_path)
+            rc.instantiate(config_path, cli_overrides=True)
 
         # Assert - all help flags should have been removed
         self.assertNotIn("--help", argv_during_integrate)
@@ -252,7 +252,7 @@ class SysArgvManipulationTests(TestCase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.instantiate(config_path)
+            rc.instantiate(config_path, cli_overrides=True)
 
         # Assert - --help removed but other args preserved
         self.assertNotIn("--help", argv_during_integrate)
@@ -279,7 +279,7 @@ class SysArgvManipulationTests(TestCase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.instantiate(config_path)
+            rc.instantiate(config_path, cli_overrides=True)
 
         # Assert - --help should still be in argv when integrate was called
         self.assertIn("--help", argv_during_integrate)

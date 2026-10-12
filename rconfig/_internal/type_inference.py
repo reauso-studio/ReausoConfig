@@ -10,7 +10,7 @@ Implements a composable unwrapping pipeline:
 4. Layer 3 — Verify/register: Ensure concrete and usable
 """
 
-from typing import Any, Union, get_origin, get_type_hints
+from typing import Any, get_type_hints
 
 from rconfig._internal.path_utils import (
     navigate_path,
@@ -23,6 +23,7 @@ from rconfig._internal.type_utils import (
     extracted_container_element_type,
     is_class_type,
     is_concrete_type,
+    is_union_hint,
     register_inferred_target,
     resolved_union_candidate,
     unwrapped_hint,
@@ -155,7 +156,7 @@ def _infer_plain_field_type(
             return target_name
 
     # Layer 2b: try union structural matching
-    if get_origin(unwrapped) is Union:
+    if is_union_hint(unwrapped):
         try:
             field_config = navigate_path(config, segments)
         except PathNavigationError:

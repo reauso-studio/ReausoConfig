@@ -5,7 +5,7 @@ config value interpolation using the ${...} syntax.
 
 Features:
 - Config path references: ${/model.lr}, ${./local}, ${model.lr}
-- Environment variables: ${env:PATH}, ${env:HOME,/default}
+- Environment variables: ${env:PATH}, ${env:HOME ?: "/default"}
 - Expressions: ${/a * 2 + /b}, ${/epochs > 100 and /lr < 0.01}
 - List operations: ${/items[0]}, ${/list + /other}, ${/items | filter(x > 0)}
 

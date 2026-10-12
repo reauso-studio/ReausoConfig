@@ -1,5 +1,5 @@
 _target_: evalconfig
-metrics: "accuracy"  # Wrong! Should be list[str], not str
+metrics: 5  # Wrong! Should be list[str], not int (a string would become a one-item list)
 log:
   _target_: logger
   level: INFO

@@ -58,9 +58,9 @@ Remove a previously registered configuration reference.
 rc.unregister(name="model")
 ```
 
-### `rc.validate(path, *, inner_path=None, overrides=None, cli_overrides=True)`
+### `rc.validate(path, *, inner_path=None, overrides=None, cli_overrides=None)`
 
-Validate a config file without instantiating (dry-run). Checks all `_required_` values have been satisfied.
+Validate a config file without instantiating (dry-run). Checks all `_required_` values have been satisfied. Like `rc.instantiate()`, it resolves `${...}` interpolations first and [converts string values](type-coercion.md) to the declared field types, so a value that cannot be converted is reported as a `ValueCoercionError` in `errors`.
 
 **Parameters:**
 
@@ -69,7 +69,7 @@ Validate a config file without instantiating (dry-run). Checks all `_required_` 
 | `path`          | `StrOrPath`             | required | Path to the configuration file. Accepts str, Path, or any os.PathLike.          |
 | `inner_path`    | `str \| None`            | `None` | Dot-notation path to validate only a section (e.g., `"model"` or `"trainer.callbacks[0]"`). `_required_` markers outside this section are ignored. When specified, the root-level `_target_` is optional and types can be inferred from parent's type hints (including `list[X]`, `set[X]`, `dict[str, X]`, `Sequence[X]`, `Mapping[K, V]`, `tuple[A, B, C]`, `Optional[container]`, `Annotated[X, ...]`, `NewType`, and `Union[A, B]` via structural matching). |
 | `overrides`     | `dict[str, Any] \| None` | `None` | Dictionary of config overrides using dot notation keys.                         |
-| `cli_overrides` | `bool`                  | `True` | Whether to parse CLI overrides from `sys.argv`.                               |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 
 **Returns:** `ValidationResult` with fields:
 
@@ -103,7 +103,7 @@ result = rc.validate(
 result = rc.validate(path=Path("trainer.yaml"), inner_path="model")
 ```
 
-### `rc.instantiate(path, expected_type=None, *, inner_path=None, overrides=None, cli_overrides=True, lazy=False)`
+### `rc.instantiate(path, expected_type=None, *, inner_path=None, overrides=None, cli_overrides=None, lazy=False)`
 
 Load, compose, validate, and instantiate a configuration file into Python objects.
 
@@ -115,7 +115,7 @@ Load, compose, validate, and instantiate a configuration file into Python object
 | `expected_type` | `type[T] \| None`        | `None`  | Optional type for type-safe returns. Enables IDE autocompletion and type checking.                                                              |
 | `inner_path`    | `str \| None`            | `None`  | Dot-notation path to instantiate only a section (e.g.,`"model.encoder"` or `"trainer.callbacks[0]"`). Interpolations are resolved from the full config before extraction. When specified, the root-level `_target_` is optional and types can be inferred from parent's type hints (including `list[X]`, `set[X]`, `dict[str, X]`, `Sequence[X]`, `Mapping[K, V]`, `tuple[A, B, C]`, `Optional[container]`, `Annotated[X, ...]`, `NewType`, and `Union[A, B]` via structural matching). |
 | `overrides`     | `dict[str, Any] \| None` | `None`  | Config overrides using dot notation keys. Applied before CLI overrides.                                                                         |
-| `cli_overrides` | `bool`                  | `True`  | Whether to parse CLI overrides from `sys.argv`. Set to `False` for tests or library usage.                                                  |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 | `lazy`          | `bool`                  | `False` | If `True`, all nested configs delay `__init__` until first attribute access.                                                                |
 
 **Returns:** `T` if `expected_type` provided, otherwise `Any`
@@ -127,6 +127,7 @@ Load, compose, validate, and instantiate a configuration file into Python object
 | `ConfigFileError`            | File cannot be loaded or parsed             |
 | `TargetNotFoundError`        | `_target_` value not registered           |
 | `ValidationError`            | Config structure is invalid                 |
+| `ValueCoercionError`         | A string value cannot be converted to the field's declared type |
 | `RequiredValueError`         | `_required_` value not provided           |
 | `CircularRefError`           | Circular `_ref_` references detected      |
 | `CircularInstanceError`      | Circular `_instance_` references detected |
@@ -149,12 +150,14 @@ model = rc.instantiate(path="config.yaml", expected_type=ModelConfig)
 # Partial instantiation
 encoder = rc.instantiate(path="trainer.yaml", inner_path="model.encoder")
 
-# With overrides, no CLI parsing (for tests)
+# With programmatic overrides
 model = rc.instantiate(
     path="config.yaml",
     overrides={"learning_rate": 0.001},
-    cli_overrides=False,
 )
+
+# Read key=value overrides and --help from sys.argv for this call only
+model = rc.instantiate(path="config.yaml", cli_overrides=True)
 
 # Lazy instantiation
 app = rc.instantiate(path="app.yaml", lazy=True)
@@ -164,7 +167,7 @@ from pathlib import Path
 model = rc.instantiate(path=Path("config.yaml"))
 ```
 
-### `rc.instantiate_multirun(path, expected_type=None, *, sweep=None, experiments=None, overrides=None, inner_path=None, cli_overrides=True, lazy=False)`
+### `rc.instantiate_multirun(path, expected_type=None, *, sweep=None, experiments=None, overrides=None, inner_path=None, cli_overrides=None, lazy=False)`
 
 Generate and instantiate multiple config combinations from sweep parameters and experiments. See [Multirun Support](multirun-and-hooks.md#multirun-support) for detailed usage examples.
 
@@ -178,7 +181,7 @@ Generate and instantiate multiple config combinations from sweep parameters and 
 | `experiments`   | `list[dict[str, Any]] \| None`  | `None`  | List of explicit experiment override dicts.                                                                                                     |
 | `overrides`     | `dict[str, Any] \| None`         | `None`  | Constant overrides applied to all runs (lowest priority).                                                                                       |
 | `inner_path`    | `str \| None`                    | `None`  | Dot-notation path to instantiate only a section (e.g., `"model"`). Interpolations are resolved from the full config before extraction.       |
-| `cli_overrides` | `bool`                          | `True`  | Whether to parse CLI overrides from `sys.argv`.                                                                                               |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 | `lazy`          | `bool`                          | `False` | If `True`, nested configs delay `__init__` until first attribute access.                                                                    |
 
 **Returns:** `MultirunIterator[T]` if `expected_type` provided, otherwise `MultirunIterator[Any]`
@@ -235,7 +238,7 @@ for name, ref in refs.items():
         print(f"  {param_name}: {param.annotation}")
 ```
 
-### `rc.get_provenance(path, *, inner_path=None, overrides=None, cli_overrides=True)`
+### `rc.get_provenance(path, *, inner_path=None, overrides=None, cli_overrides=None)`
 
 Compose a config file and track the origin of each value.
 
@@ -246,7 +249,7 @@ Compose a config file and track the origin of each value.
 | `path`          | `StrOrPath`             | required | Path to the entry-point config file. Accepts str, Path, or any os.PathLike.         |
 | `inner_path`    | `str \| None`            | `None` | If specified, returns provenance only for this section. Uses lazy loading.          |
 | `overrides`     | `dict[str, Any] \| None` | `None` | Dictionary of config overrides using dot notation keys.                             |
-| `cli_overrides` | `bool`                  | `True` | Whether to parse CLI overrides from `sys.argv`. Set to `False` for tests or library usage. |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 
 **Returns:** `Provenance` object with methods:
 
@@ -256,6 +259,8 @@ Compose a config file and track the origin of each value.
 - `to_dict() -> dict`: Export as dictionary
 
 Use `rc.format(prov)` for customized output formatting.
+
+Entry values are [type-converted](type-coercion.md) like in `rc.instantiate()` (an env value `"8080"` for an `int` field is reported as `8080`; `entry.interpolation.kind` is still `"env"`). A value that cannot be converted is left unchanged instead of raising.
 
 **Examples:**
 
@@ -280,8 +285,8 @@ prov = rc.get_provenance(
     overrides={"model.lr": 0.01}
 )
 
-# Disable CLI parsing (for tests/library usage)
-prov = rc.get_provenance(path=Path("config.yaml"), cli_overrides=False)
+# Include CLI overrides from sys.argv in the provenance
+prov = rc.get_provenance(path=Path("config.yaml"), cli_overrides=True)
 ```
 
 ### `rc.diff(left, right, *, left_inner_path=None, right_inner_path=None, left_overrides=None, right_overrides=None, cli_overrides=False)`
@@ -440,7 +445,7 @@ rc.force_initialize(obj=model)  # model.__init__ called now
 print(rc.is_lazy_proxy(obj=model))  # False
 ```
 
-### `rc.to_dict(path, *, overrides=None, cli_overrides=True, exclude_markers=False)`
+### `rc.to_dict(path, *, overrides=None, cli_overrides=None, exclude_markers=False)`
 
 Export resolved config as a Python dictionary.
 
@@ -450,10 +455,12 @@ Export resolved config as a Python dictionary.
 | ------------------- | ------------------------- | --------- | ------------------------------------------------------------------------------------------- |
 | `path`            | `StrOrPath`             | required  | Path to config file. Accepts str, Path, or any os.PathLike.                                 |
 | `overrides`       | `dict[str, Any] \| None` | `None`  | Dictionary of config overrides.                                                             |
-| `cli_overrides`   | `bool`                  | `True`  | Whether to parse CLI overrides.                                                             |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 | `exclude_markers` | `bool`                  | `False` | If `True`, remove internal markers (`_target_`, `_ref_`, `_instance_`, `_lazy_`). |
 
 **Returns:** `dict[str, Any]` - Resolved config as a dictionary
+
+String values are [converted](type-coercion.md) to the declared field types, as in `rc.instantiate()`; values that cannot be converted are exported unchanged. The same applies to `to_yaml()`, `to_json()`, `to_toml()`, `to_file()`, `to_files()` and `export()`.
 
 **Examples:**
 
@@ -462,7 +469,7 @@ config = rc.to_dict(path=Path("config.yaml"))
 clean = rc.to_dict(path=Path("config.yaml"), exclude_markers=True)
 ```
 
-### `rc.to_yaml(path, *, overrides=None, cli_overrides=True, exclude_markers=False)`
+### `rc.to_yaml(path, *, overrides=None, cli_overrides=None, exclude_markers=False)`
 
 Export resolved config as a YAML string.
 
@@ -472,7 +479,7 @@ Export resolved config as a YAML string.
 | ------------------- | ------------------------- | --------- | ------------------------------------- |
 | `path`            | `StrOrPath`             | required  | Path to config file. Accepts str, Path, or any os.PathLike. |
 | `overrides`       | `dict[str, Any] \| None` | `None`  | Dictionary of config overrides.       |
-| `cli_overrides`   | `bool`                  | `True`  | Whether to parse CLI overrides.       |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 | `exclude_markers` | `bool`                  | `False` | If `True`, remove internal markers. |
 
 **Returns:** `str` - Resolved config as a YAML string
@@ -483,7 +490,7 @@ Export resolved config as a YAML string.
 yaml_str = rc.to_yaml(path=Path("config.yaml"))
 ```
 
-### `rc.to_json(path, *, overrides=None, cli_overrides=True, exclude_markers=False, indent=2)`
+### `rc.to_json(path, *, overrides=None, cli_overrides=None, exclude_markers=False, indent=2)`
 
 Export resolved config as a JSON string.
 
@@ -493,7 +500,7 @@ Export resolved config as a JSON string.
 | ------------------- | ------------------------- | --------- | ------------------------------------------------------------- |
 | `path`            | `StrOrPath`             | required  | Path to config file. Accepts str, Path, or any os.PathLike.   |
 | `overrides`       | `dict[str, Any] \| None` | `None`  | Dictionary of config overrides.                               |
-| `cli_overrides`   | `bool`                  | `True`  | Whether to parse CLI overrides.                               |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 | `exclude_markers` | `bool`                  | `False` | If `True`, remove internal markers.                         |
 | `indent`          | `int \| None`            | `2`     | Number of spaces for indentation.`None` for compact output. |
 
@@ -506,7 +513,7 @@ json_str = rc.to_json(path=Path("config.yaml"))
 compact = rc.to_json(path=Path("config.yaml"), indent=None)
 ```
 
-### `rc.to_toml(path, *, overrides=None, cli_overrides=True, exclude_markers=False)`
+### `rc.to_toml(path, *, overrides=None, cli_overrides=None, exclude_markers=False)`
 
 Export resolved config as a TOML string.
 
@@ -516,7 +523,7 @@ Export resolved config as a TOML string.
 | ------------------- | ------------------------- | --------- | ------------------------------------- |
 | `path`            | `StrOrPath`             | required  | Path to config file. Accepts str, Path, or any os.PathLike. |
 | `overrides`       | `dict[str, Any] \| None` | `None`  | Dictionary of config overrides.       |
-| `cli_overrides`   | `bool`                  | `True`  | Whether to parse CLI overrides.       |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 | `exclude_markers` | `bool`                  | `False` | If `True`, remove internal markers. |
 
 **Returns:** `str` - Resolved config as a TOML string
@@ -527,7 +534,7 @@ Export resolved config as a TOML string.
 toml_str = rc.to_toml(path=Path("config.yaml"))
 ```
 
-### `rc.to_file(source, output_path, *, overrides=None, cli_overrides=True, exclude_markers=False)`
+### `rc.to_file(source, output_path, *, overrides=None, cli_overrides=None, exclude_markers=False)`
 
 Export config to a single file with format auto-detected from output path extension.
 
@@ -538,7 +545,7 @@ Export config to a single file with format auto-detected from output path extens
 | `source`          | `StrOrPath \| dict[str, Any]` | required  | Path to config file, or dict. Accepts str, Path, or any os.PathLike.             |
 | `output_path`     | `StrOrPath`                   | required  | Output file path. Extension determines format (`.yaml`, `.json`, `.toml`). |
 | `overrides`       | `dict[str, Any] \| None` | `None`  | Config overrides. Ignored if source is dict.                                     |
-| `cli_overrides`   | `bool`                  | `True`  | Parse CLI overrides. Ignored if source is dict.                                  |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). Ignored if source is dict. |
 | `exclude_markers` | `bool`                  | `False` | If `True`, remove internal markers.                                            |
 
 **Returns:** `None`
@@ -560,7 +567,7 @@ config = {"model": {"lr": 0.01}, "epochs": 10}
 rc.to_file(source=config, output_path=Path("output.yaml"))
 ```
 
-### `rc.to_files(source, config_root_file, *, overrides=None, cli_overrides=True, exclude_markers=False)`
+### `rc.to_files(source, config_root_file, *, overrides=None, cli_overrides=None, exclude_markers=False)`
 
 Export config preserving file structure (with `_ref_` relationships).
 
@@ -571,7 +578,7 @@ Export config preserving file structure (with `_ref_` relationships).
 | `source`           | `StrOrPath \| dict[str, Any]` | required  | Path to config file, or dict. Accepts str, Path, or any os.PathLike. |
 | `config_root_file` | `StrOrPath`                   | required  | Output root file path. Extension determines root format. |
 | `overrides`        | `dict[str, Any] \| None` | `None`  | Config overrides. Ignored if source is dict.             |
-| `cli_overrides`    | `bool`                  | `True`  | Parse CLI overrides. Ignored if source is dict.          |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). Ignored if source is dict. |
 | `exclude_markers`  | `bool`                  | `False` | If `True`, remove internal markers.                    |
 
 **Returns:** `None`
@@ -591,7 +598,7 @@ rc.to_files(source=Path("trainer.yaml"), config_root_file=Path("output/trainer.j
 #   output/models/resnet.yaml (preserves YAML)
 ```
 
-### `rc.export(path, exporter, *, overrides=None, cli_overrides=True)`
+### `rc.export(path, exporter, *, overrides=None, cli_overrides=None)`
 
 Export resolved config using a custom exporter.
 
@@ -602,7 +609,7 @@ Export resolved config using a custom exporter.
 | `path`          | `StrOrPath`             | required | Path to config file. Accepts str, Path, or any os.PathLike. |
 | `exporter`      | `Exporter`              | required | Exporter instance to use.       |
 | `overrides`     | `dict[str, Any] \| None` | `None` | Dictionary of config overrides. |
-| `cli_overrides` | `bool`                  | `True` | Parse CLI overrides.            |
+| `cli_overrides` | `bool \| None` | `None` | Parse CLI overrides and `--help` from `sys.argv`. `None` uses `rc.set_cli_overrides()` (off by default). |
 
 **Returns:** The exported data in the exporter's target format
 
@@ -720,6 +727,44 @@ rc.unregister_resolver("uuid")
 rc.unregister_resolver("db", "lookup")
 rc.unregister_resolver("db:lookup")
 rc.unregister_resolver("db.lookup")
+```
+
+### `rc.set_cli_overrides(enabled)`
+
+Set whether config loading reads `sys.argv` by default. When enabled, `key=value` arguments are applied as overrides and `--help`/`-h` shows config help. CLI overrides are **disabled by default**, so loading config inside a web app, worker, or test run never touches the host program's command line. A per-call `cli_overrides=True`/`False` argument takes precedence over this setting. Thread-safe.
+
+**Parameters:**
+
+| Parameter | Type   | Default  | Description                                                     |
+| --------- | ------ | -------- | --------------------------------------------------------------- |
+| `enabled` | `bool` | required | `True` to read CLI overrides by default, `False` to ignore `sys.argv`. |
+
+**Returns:** `None`
+
+**Examples:**
+
+```python
+# At the start of a training script
+rc.set_cli_overrides(True)
+model = rc.instantiate(path="config.yaml")  # python train.py model.lr=0.01
+```
+
+See [Embedding in Applications](embedding.md) for when to enable it.
+
+### `rc.cli_overrides_enabled()`
+
+Return whether config loading reads `sys.argv` by default. Thread-safe.
+
+**Parameters:** None
+
+**Returns:** `bool` - The process-wide setting from `rc.set_cli_overrides()` (`False` initially).
+
+**Examples:**
+
+```python
+print(rc.cli_overrides_enabled())  # False
+rc.set_cli_overrides(True)
+print(rc.cli_overrides_enabled())  # True
 ```
 
 ### `rc.set_help_integration(integration)`
@@ -1800,3 +1845,32 @@ Exception raised when a hook function raises an error during execution.
 | `hook_name`      | `str`          | Name of the failing hook       |
 | `phase`          | `HookPhase`    | Phase when error occurred      |
 | `original_error` | `Exception`    | The original exception         |
+
+### Error Classes
+
+See [Error Handling](advanced-usage.md#error-handling) for the full exception hierarchy.
+
+#### `ValueCoercionError`
+
+Subclass of `TypeMismatchError` (and therefore `ValidationError`). Raised by `rc.instantiate()` and `rc.instantiate_multirun()` when a string value cannot be [converted](type-coercion.md) to the field's declared type. `rc.validate()` reports it in `ValidationResult.errors` instead of raising.
+
+**Attributes:**
+
+| Attribute           | Type              | Description                                                                 |
+| ------------------- | ----------------- | --------------------------------------------------------------------------- |
+| `field`             | `str`             | Name of the field (with index for list items, e.g. `"ports[0]"`)            |
+| `expected`          | `str`             | Readable name of the expected type                                          |
+| `value`             | `str`             | The string value that could not be converted                                |
+| `reason`            | `str`             | Why the conversion failed                                                   |
+| `config_path`       | `str`             | Full config path of the value (e.g. `"server.port"`)                        |
+| `source_expression` | `str \| None`     | The unresolved interpolation the value came from, if any                    |
+| `env_vars`          | `tuple[str, ...]` | Environment variables referenced by `source_expression`                     |
+
+**Example:**
+
+```python
+try:
+    app = rc.instantiate(path="app.yaml")
+except rc.ValueCoercionError as e:
+    print(e.config_path, e.env_vars)  # debug ('DEBUG',)
+```

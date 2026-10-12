@@ -1,9 +1,11 @@
 """Tests for the module-level API (rconfig.register, rconfig.instantiate, etc.)."""
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from unittest import TestCase
+from unittest.mock import patch
 
 import rconfig as rc
 from rconfig.composition import clear_cache
@@ -1823,3 +1825,240 @@ trainer:
                     inner_path="trainer.callbacks[0]",
                     cli_overrides=False,
                 )
+
+
+@dataclass
+class _HostModel:
+    lr: float
+
+
+class ApiCliOverridesDefaultTests(TestCase):
+    """Tests for the default CLI override behaviour when embedded in a host program.
+
+    A host program (web app, worker, test runner) owns sys.argv. With default
+    arguments, loading a config should neither consume nor reject its arguments.
+    """
+
+    HOST_ARGV = ["manage.py", "migrate", "verbosity=2"]
+
+    def setUp(self):
+        rc._store.clear()
+        clear_cache()
+        rc.register("model", _HostModel)
+        self._fs = MockFileSystem("/configs")
+        self._fs.add_file("/configs/model.yaml", "_target_: model\nlr: 0.1\n")
+
+    def test_instantiate__DefaultCliOverridesWithHostArgv__IgnoresArgv(self):
+        """Test that instantiate() ignores host program arguments by default."""
+        # Arrange
+        with mock_filesystem(self._fs), patch.object(sys, "argv", list(self.HOST_ARGV)):
+            # Act
+            result = rc.instantiate(Path("/configs/model.yaml"))
+
+        # Assert
+        self.assertEqual(result.lr, 0.1)
+
+    def test_validate__DefaultCliOverridesWithHostArgv__IgnoresArgv(self):
+        """Test that validate() ignores host program arguments by default."""
+        # Arrange
+        with mock_filesystem(self._fs), patch.object(sys, "argv", list(self.HOST_ARGV)):
+            # Act
+            result = rc.validate(Path("/configs/model.yaml"))
+
+        # Assert
+        self.assertTrue(result.valid)
+
+    def test_toDict__DefaultCliOverridesWithHostArgv__IgnoresArgv(self):
+        """Test that to_dict() ignores host program arguments by default."""
+        # Arrange
+        with mock_filesystem(self._fs), patch.object(sys, "argv", list(self.HOST_ARGV)):
+            # Act
+            result = rc.to_dict(Path("/configs/model.yaml"))
+
+        # Assert
+        self.assertEqual(result["lr"], 0.1)
+
+    def test_getProvenance__DefaultCliOverridesWithHostArgv__IgnoresArgv(self):
+        """Test that get_provenance() ignores host program arguments by default."""
+        # Arrange
+        with mock_filesystem(self._fs), patch.object(sys, "argv", list(self.HOST_ARGV)):
+            # Act
+            provenance = rc.get_provenance(Path("/configs/model.yaml"))
+
+        # Assert
+        self.assertEqual(provenance["lr"].value, 0.1)
+
+    def test_instantiateMultirun__DefaultCliOverridesWithHostArgv__IgnoresArgv(self):
+        """Test that instantiate_multirun() ignores host program arguments by default."""
+        # Arrange
+        with mock_filesystem(self._fs), patch.object(sys, "argv", list(self.HOST_ARGV)):
+            # Act
+            results = list(rc.instantiate_multirun(Path("/configs/model.yaml"), sweep={"lr": [0.2]}))
+
+        # Assert
+        self.assertEqual(results[0].instance.lr, 0.2)
+
+    def test_instantiateMultirun__DefaultCliOverridesWithHostExperimentName__IgnoresArgv(self):
+        """Test that a host's ``-e <name>`` flag without '=' is skipped by multirun parsing."""
+        # Arrange
+        host_argv = ["worker.py", "-e", "staging"]
+        with mock_filesystem(self._fs), patch.object(sys, "argv", host_argv):
+            # Act
+            results = list(rc.instantiate_multirun(Path("/configs/model.yaml"), sweep={"lr": [0.2]}))
+
+        # Assert
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].instance.lr, 0.2)
+
+    def test_instantiateMultirun__DefaultCliOverridesWithHostExperimentKeyValue__IgnoresArgv(self):
+        """Test that a host's ``-e KEY=VALUE`` flag is not read as a multirun experiment."""
+        # Arrange
+        host_argv = ["worker.py", "-e", "lr=0.9"]
+        with mock_filesystem(self._fs), patch.object(sys, "argv", host_argv):
+            # Act
+            results = list(
+                rc.instantiate_multirun(Path("/configs/model.yaml"), experiments=[{"lr": 0.2}])
+            )
+
+        # Assert
+        self.assertEqual([result.instance.lr for result in results], [0.2])
+
+    def test_instantiate__ExplicitCliOverridesWithValidArg__AppliesOverride(self):
+        """Test that explicitly enabled CLI overrides still apply."""
+        # Arrange
+        with mock_filesystem(self._fs), patch.object(sys, "argv", ["train.py", "lr=0.5"]):
+            # Act
+            result = rc.instantiate(Path("/configs/model.yaml"), cli_overrides=True)
+
+        # Assert
+        self.assertEqual(result.lr, 0.5)
+
+
+class SetCliOverridesTests(TestCase):
+    """Tests for the process-wide CLI override policy."""
+
+    def setUp(self):
+        rc._store.clear()
+        clear_cache()
+        rc.register("model", _HostModel)
+        self._fs = MockFileSystem("/configs")
+        self._fs.add_file("/configs/model.yaml", "_target_: model\nlr: 0.1\n")
+
+    def tearDown(self):
+        rc.set_cli_overrides(False)
+
+    def test_cliOverridesEnabled__Default__ReturnsFalse(self):
+        """Test that CLI overrides are off unless enabled."""
+        # Act & Assert
+        self.assertFalse(rc.cli_overrides_enabled())
+
+    def test_instantiate__CliOverridesEnabledProcessWide__AppliesArgv(self):
+        """Test that set_cli_overrides(True) makes calls read sys.argv by default."""
+        # Arrange
+        rc.set_cli_overrides(True)
+
+        with mock_filesystem(self._fs), patch.object(sys, "argv", ["train.py", "lr=0.5"]):
+            # Act
+            result = rc.instantiate(Path("/configs/model.yaml"))
+
+        # Assert
+        self.assertTrue(rc.cli_overrides_enabled())
+        self.assertEqual(result.lr, 0.5)
+
+    def test_instantiate__PerCallFalseWithProcessWideTrue__IgnoresArgv(self):
+        """Test that a per-call cli_overrides=False takes precedence."""
+        # Arrange
+        rc.set_cli_overrides(True)
+
+        with mock_filesystem(self._fs), patch.object(sys, "argv", ["train.py", "lr=0.5"]):
+            # Act
+            result = rc.instantiate(Path("/configs/model.yaml"), cli_overrides=False)
+
+        # Assert
+        self.assertEqual(result.lr, 0.1)
+
+
+@dataclass
+class _ServerSection:
+    port: int
+
+
+@dataclass
+class _ServiceConfig:
+    server: _ServerSection
+    retries: int
+    lr: float = 0.1
+
+
+class TypedConfigPipelineTests(TestCase):
+    """Tests for string coercion and validation inside the public pipelines."""
+
+    def setUp(self):
+        rc._store.clear()
+        clear_cache()
+        rc.register("service", _ServiceConfig)
+        rc.register("server_section", _ServerSection)
+        self._fs = MockFileSystem("/configs")
+
+    def test_instantiate__InnerPathWithUnconvertibleValueOutside__IgnoresOutsideValue(self):
+        """Test that only values inside inner_path can fail coercion."""
+        # Arrange
+        self._fs.add_file(
+            "/configs/service.yaml",
+            "_target_: service\nserver:\n  _target_: server_section\n  port: '8080'\nretries: many\n",
+        )
+
+        with mock_filesystem(self._fs):
+            # Act
+            server = rc.instantiate(Path("/configs/service.yaml"), inner_path="server")
+
+        # Assert
+        self.assertEqual(server.port, 8080)
+
+    def test_instantiate__UnconvertibleValue__RaisesValueCoercionError(self):
+        """Test that an unconvertible value raises with its path."""
+        # Arrange
+        self._fs.add_file(
+            "/configs/service.yaml",
+            "_target_: service\nserver:\n  port: '8080'\nretries: many\n",
+        )
+
+        with mock_filesystem(self._fs):
+            # Act & Assert
+            with self.assertRaises(rc.ValueCoercionError) as ctx:
+                rc.instantiate(Path("/configs/service.yaml"))
+
+        self.assertEqual(ctx.exception.config_path, "retries")
+
+    def test_validate__UnconvertibleValue__ReportsSingleCoercionError(self):
+        """Test that validate() reports a failed conversion once, not twice."""
+        # Arrange
+        self._fs.add_file(
+            "/configs/service.yaml",
+            "_target_: service\nserver:\n  port: 80\nretries: many\n",
+        )
+
+        with mock_filesystem(self._fs):
+            # Act
+            result = rc.validate(Path("/configs/service.yaml"))
+
+        # Assert
+        self.assertFalse(result.valid)
+        self.assertEqual(len(result.errors), 1)
+        self.assertIsInstance(result.errors[0], rc.ValueCoercionError)
+
+    def test_validate__InterpolationOnUnsatisfiedRequired__ReportsRequiredValue(self):
+        """Test that an interpolation depending on a _required_ value is not raised."""
+        # Arrange
+        self._fs.add_file(
+            "/configs/service.yaml",
+            "_target_: service\nserver:\n  port: 80\nretries: _required_\nlr: ${/retries + 1}\n",
+        )
+
+        with mock_filesystem(self._fs):
+            # Act
+            result = rc.validate(Path("/configs/service.yaml"))
+
+        # Assert
+        self.assertFalse(result.valid)
+        self.assertIsInstance(result.errors[0], rc.RequiredValueError)

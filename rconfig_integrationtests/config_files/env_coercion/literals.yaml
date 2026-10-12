@@ -1,0 +1,6 @@
+_target_: env_literals
+# Values that must never be coerced
+flag_text: "false"
+path: 'x-${env:RCT_A ?: "a"}'
+untyped:
+  debug: '${env:RCT_DEBUG ?: false}'

@@ -1,0 +1,3 @@
+_target_: env_lists
+# Env-sourced comma-separated value for a list[str] field
+hosts: '${env:RCT_HOSTS ?: ["localhost"]}'
