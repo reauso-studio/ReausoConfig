@@ -2618,3 +2618,56 @@ class ConfigValidatorABCContainerTests(TestCase):
 
         self.assertFalse(result.valid)
         self.assertIsInstance(result.errors[0], TypeMismatchError)
+
+
+class ConfigValidatorPep604UnionTests(TestCase):
+    """Tests for PEP 604 union type hints (``X | None``) in validation."""
+
+    def _empty_store(self) -> TargetRegistry:
+        store = TargetRegistry()
+        store.clear()
+        return store
+
+    def _validation_result(self, field_type: type, value: object) -> ValidationResult:
+        """Validate a single-field config whose field has the given type hint."""
+        store = self._empty_store()
+
+        @dataclass
+        class Config:
+            value: field_type
+
+        store.register("config", Config)
+        validator = ConfigValidator(store)
+        return validator.validate({"_target_": "config", "value": value})
+
+    def test_validate__Pep604OptionalWithInt__ReturnsValid(self):
+        """Test that an int value satisfies an ``int | None`` hint."""
+        # Act
+        result = self._validation_result(int | None, 5)
+
+        # Assert
+        self.assertTrue(result.valid)
+
+    def test_validate__Pep604OptionalWithNone__ReturnsValid(self):
+        """Test that None satisfies an ``int | None`` hint."""
+        # Act
+        result = self._validation_result(int | None, None)
+
+        # Assert
+        self.assertTrue(result.valid)
+
+    def test_validate__TypingOptionalWithNone__ReturnsValid(self):
+        """Test that None satisfies an ``Optional[int]`` hint."""
+        # Act
+        result = self._validation_result(Optional[int], None)
+
+        # Assert
+        self.assertTrue(result.valid)
+
+    def test_validate__TypingOptionalWithInt__ReturnsValid(self):
+        """Test that an int value satisfies an ``Optional[int]`` hint."""
+        # Act
+        result = self._validation_result(Optional[int], 5)
+
+        # Assert
+        self.assertTrue(result.valid)

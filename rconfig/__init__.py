@@ -22,8 +22,9 @@ Example::
     # Type-safe version
     model = rc.instantiate(Path("config.yaml"), ModelConfig)
 
-    # With CLI overrides (enabled by default)
+    # With CLI overrides (opt-in, e.g. for a training script)
     # python main.py hidden_size=512
+    rc.set_cli_overrides(True)
     model = rc.instantiate(Path("config.yaml"))
 
     # With programmatic overrides
@@ -79,6 +80,7 @@ from .diff import (
     get_diff_registry,
 )
 from .validation import ConfigValidator, ValidationResult
+from .coercion import ConfigCoercer
 from .instantiation import ConfigInstantiator, is_lazy_proxy, force_initialize
 from .composition import (
     ConfigComposer,
@@ -167,6 +169,7 @@ from .errors import (
     TypeMismatchError,
     UnknownResolverError,
     ValidationError,
+    ValueCoercionError,
 )
 from .interpolation.registry import ResolverRegistry
 from .deprecation import (
@@ -193,10 +196,16 @@ _resolver_registry = ResolverRegistry()
 _hook_registry = HookRegistry()
 _validator = ConfigValidator(_store)
 _instantiator = ConfigInstantiator(_store, _validator)
+_coercer = ConfigCoercer(_store)
 
 # Help integration storage (thread-safe)
 _help_integration: HelpIntegration = FlatHelpIntegration()
 _help_integration_lock = threading.RLock()
+
+# CLI override policy (thread-safe). Off by default: a library embedded in another
+# program must not read that program's command line unless asked to.
+_cli_overrides_default = False
+_cli_overrides_lock = threading.RLock()
 
 
 # =============================================================================
@@ -551,6 +560,41 @@ def help_integration(func: Callable[["Provenance", str], None]) -> Callable[["Pr
     return func
 
 
+def set_cli_overrides(enabled: bool) -> None:
+    """Set whether config loading reads ``sys.argv`` by default.
+
+    When enabled, ``key=value`` arguments are applied as overrides and
+    ``--help``/``-h`` shows config help. It is disabled by default, so loading
+    config inside a web app, worker or test run never touches the host
+    program's command line. A per-call ``cli_overrides`` argument takes
+    precedence over this setting.
+
+    Thread-safe: protected by internal lock.
+
+    :param enabled: True to read CLI overrides by default, False to ignore sys.argv.
+
+    Example::
+
+        # At the start of a training script
+        rc.set_cli_overrides(True)
+        model = rc.instantiate(Path("config.yaml"))  # python train.py lr=0.01
+    """
+    global _cli_overrides_default
+    with _cli_overrides_lock:
+        _cli_overrides_default = enabled
+
+
+def cli_overrides_enabled() -> bool:
+    """Return whether config loading reads ``sys.argv`` by default.
+
+    Thread-safe: protected by internal lock.
+
+    :return: The process-wide default set by set_cli_overrides() (False initially).
+    """
+    with _cli_overrides_lock:
+        return _cli_overrides_default
+
+
 def register(name: str, target: type) -> None:
     """Register a target class under a unique name.
 
@@ -577,12 +621,101 @@ def unregister(name: str) -> None:
     _store.unregister(name)
 
 
+# =============================================================================
+# Internal Pipeline Helpers
+# =============================================================================
+
+
+def _effective_cli_overrides(cli_overrides: bool | None) -> bool:
+    """Resolve a per-call cli_overrides argument against the process-wide default."""
+    if cli_overrides is None:
+        return cli_overrides_enabled()
+    return cli_overrides
+
+
+def _handle_help_request(
+    path: Path,
+    *,
+    inner_path: str | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> None:
+    """Hand config help to the help integration when --help/-h is in sys.argv.
+
+    Only called when CLI overrides are enabled. The provenance passed to the
+    integration never applies CLI overrides, so other command-line arguments
+    cannot break the help output.
+    """
+    if "--help" not in sys.argv and "-h" not in sys.argv:
+        return
+
+    integration = current_help_integration()
+
+    # Consume --help/-h from sys.argv if integration requests it
+    if integration.consume_help_flag:
+        sys.argv = [arg for arg in sys.argv if arg not in ("--help", "-h")]
+
+    # Get provenance with type hints and descriptions
+    provenance = get_provenance(
+        path, inner_path=inner_path, overrides=overrides, cli_overrides=False
+    )
+
+    # Call the integration (it's responsible for sys.exit() if needed)
+    integration.integrate(provenance, str(path))
+
+
+def _collected_overrides(overrides: dict[str, Any] | None, cli_enabled: bool) -> list[Override]:
+    """Return programmatic overrides followed by CLI overrides (CLI wins on conflict)."""
+    collected: list[Override] = []
+    if overrides:
+        collected.extend(parse_dict_overrides(overrides))
+    if cli_enabled:
+        collected.extend(extract_cli_overrides(sys.argv[1:]))
+    return collected
+
+
+def _coerce_override_values(overrides: list[Override], config: dict[str, Any]) -> None:
+    """Validate override paths and coerce string values to the target field types."""
+    for override in overrides:
+        expected_type_hint = _validator.validate_override_path(override.path, config)
+        if override.operation == "set" and isinstance(override.value, str):
+            override.value = parse_override_value(override.value, expected_type_hint)
+
+
+def _typed_config(
+    config: dict[str, Any],
+    unresolved: dict[str, Any],
+    *,
+    inner_path: str | None = None,
+) -> dict[str, Any]:
+    """Return the resolved config with strings converted to declared field types.
+
+    :param config: The config after interpolation.
+    :param unresolved: The same config before interpolation (for error messages).
+    :param inner_path: If given, only values inside this section can fail.
+    :return: The config with converted values.
+    :raises ValueCoercionError: For the first value that cannot be converted.
+    """
+    coercion = _coercer.coerced(config, unresolved)
+    errors = [
+        error for error in coercion.errors
+        if inner_path is None or _is_within_path(error.config_path, inner_path)
+    ]
+    if errors:
+        raise errors[0]
+    return coercion.config
+
+
+def _is_within_path(path: str, parent: str) -> bool:
+    """Check if a config path is the parent path or lies inside it."""
+    return path == parent or path.startswith(f"{parent}.") or path.startswith(f"{parent}[")
+
+
 def validate(
     path: StrOrPath,
     *,
     inner_path: str | None = None,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
 ) -> ValidationResult:
     """Validate a config file without instantiating (dry-run).
 
@@ -595,7 +728,8 @@ def validate(
                        When specified, only the sub-config at this path is validated
                        and _required_ markers outside this section are ignored.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv (default True).
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :return: ValidationResult with any errors found.
     :raises InvalidInnerPathError: If inner_path doesn't exist or is invalid.
 
@@ -615,48 +749,37 @@ def validate(
         # Validate only a section
         result = rc.validate(Path("trainer.yaml"), inner_path="model")
     """
+    from rconfig.interpolation import resolve_interpolations
     from rconfig.validation.required import find_required_markers
     from rconfig.errors import RequiredValueError
 
     path = ensure_path(path)
 
-    # Handle --help/-h when cli_overrides is enabled
-    if cli_overrides and ("--help" in sys.argv or "-h" in sys.argv):
-        integration = current_help_integration()
-
-        # Consume --help/-h from sys.argv if integration requests it
-        if integration.consume_help_flag:
-            sys.argv = [arg for arg in sys.argv if arg not in ("--help", "-h")]
-
-        # Get provenance with type hints and descriptions
-        provenance = get_provenance(path)
-
-        # Call the integration (it's responsible for sys.exit() if needed)
-        integration.integrate(provenance, str(path))
+    # Handle --help/-h when CLI overrides are enabled
+    cli_enabled = _effective_cli_overrides(cli_overrides)
+    if cli_enabled:
+        _handle_help_request(path)
 
     composer = ConfigComposer()
     config = composer.compose(path)
 
-    # Collect all overrides
-    all_overrides: list[Override] = []
-
-    # Programmatic overrides first
-    if overrides:
-        all_overrides.extend(parse_dict_overrides(overrides))
-
-    # CLI overrides second (wins on conflict)
-    if cli_overrides:
-        all_overrides.extend(extract_cli_overrides(sys.argv[1:]))
-
-    # Validate paths and coerce values
-    for override in all_overrides:
-        expected_type_hint = _validator.validate_override_path(override.path, config)
-        if override.operation == "set" and isinstance(override.value, str):
-            override.value = parse_override_value(override.value, expected_type_hint)
+    # Collect overrides (CLI wins on conflict), validate paths and coerce values
+    all_overrides = _collected_overrides(overrides, cli_enabled)
+    _coerce_override_values(all_overrides, config)
 
     # Apply overrides
     if all_overrides:
         config = apply_overrides(config, all_overrides)
+
+    # Resolve interpolations on the full config, as instantiate() does
+    unresolved = config
+    try:
+        config = resolve_interpolations(config)
+    except InterpolationError:
+        # An interpolation may depend on an unsatisfied _required_ value,
+        # which is reported as a RequiredValueError below instead
+        if not find_required_markers(config):
+            raise
 
     # Handle partial validation with inner_path
     if inner_path is not None:
@@ -665,6 +788,7 @@ def validate(
 
         try:
             sub_config = get_value_at_path(config, inner_path)
+            unresolved = get_value_at_path(unresolved, inner_path)
         except (KeyError, IndexError, TypeError) as e:
             raise InvalidInnerPathError(inner_path, str(e))
 
@@ -682,6 +806,10 @@ def validate(
 
         config = sub_config
 
+    # Convert strings to declared field types; unconvertible values are reported
+    coercion = _coercer.coerced(config, unresolved if isinstance(unresolved, dict) else None)
+    config = coercion.config
+
     # Check for unsatisfied _required_ values
     required_markers = find_required_markers(config)
     required_errors: list[ValidationError] = []
@@ -692,18 +820,25 @@ def validate(
     # Run regular validation
     result = _validator.validate(config)
 
-    # Combine required value errors with validation errors
-    all_errors = required_errors + result.errors
+    # A value that could not be converted is reported once, by its coercion error
+    coercion_error_paths = {error.config_path for error in coercion.errors}
+    validation_errors = [
+        error for error in result.errors
+        if not (isinstance(error, TypeMismatchError) and error.config_path in coercion_error_paths)
+    ]
+
+    # Combine required value, coercion and validation errors
+    all_errors = required_errors + list(coercion.errors) + validation_errors
     return ValidationResult(valid=len(all_errors) == 0, errors=all_errors)
 
 
 @overload
-def instantiate(path: StrOrPath, *, cli_overrides: bool = ..., lazy: bool = ...) -> Any: ...
+def instantiate(path: StrOrPath, *, cli_overrides: bool | None = ..., lazy: bool = ...) -> Any: ...
 @overload
-def instantiate(path: StrOrPath, expected_type: type[T], *, cli_overrides: bool = ..., lazy: bool = ...) -> T: ...
+def instantiate(path: StrOrPath, expected_type: type[T], *, cli_overrides: bool | None = ..., lazy: bool = ...) -> T: ...
 @overload
 def instantiate(
-    path: StrOrPath, *, overrides: dict[str, Any], cli_overrides: bool = ..., lazy: bool = ...
+    path: StrOrPath, *, overrides: dict[str, Any], cli_overrides: bool | None = ..., lazy: bool = ...
 ) -> Any: ...
 @overload
 def instantiate(
@@ -711,12 +846,12 @@ def instantiate(
     expected_type: type[T],
     *,
     overrides: dict[str, Any],
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> T: ...
 @overload
 def instantiate(
-    path: StrOrPath, *, inner_path: str, cli_overrides: bool = ..., lazy: bool = ...
+    path: StrOrPath, *, inner_path: str, cli_overrides: bool | None = ..., lazy: bool = ...
 ) -> Any: ...
 @overload
 def instantiate(
@@ -724,7 +859,7 @@ def instantiate(
     expected_type: type[T],
     *,
     inner_path: str,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> T: ...
 @overload
@@ -733,7 +868,7 @@ def instantiate(
     *,
     inner_path: str,
     overrides: dict[str, Any],
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> Any: ...
 @overload
@@ -743,7 +878,7 @@ def instantiate(
     *,
     inner_path: str,
     overrides: dict[str, Any],
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> T: ...
 
@@ -754,7 +889,7 @@ def instantiate(
     *,
     inner_path: str | None = None,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     lazy: bool = False,
 ) -> T | Any:
     """Load, compose, validate, and instantiate a config file.
@@ -769,7 +904,8 @@ def instantiate(
                        Interpolations are resolved from the full config before
                        extraction. External _instance_ refs are auto-instantiated.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv (default True).
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :param lazy: If True, all nested configs are lazily instantiated.
                  Lazy objects delay __init__ until first attribute access.
     :return: Instantiated object (typed if expected_type provided).
@@ -786,7 +922,7 @@ def instantiate(
 
     Example::
 
-        # From file (CLI overrides enabled by default)
+        # From file
         model = rc.instantiate(Path("config.yaml"))
 
         # Type-safe version
@@ -799,8 +935,8 @@ def instantiate(
         # With programmatic overrides
         model = rc.instantiate(Path("config.yaml"), overrides={"model.lr": 0.01})
 
-        # Disable CLI overrides (for tests)
-        model = rc.instantiate(Path("config.yaml"), cli_overrides=False)
+        # Read CLI overrides for this call only (or use rc.set_cli_overrides(True))
+        model = rc.instantiate(Path("config.yaml"), cli_overrides=True)
 
         # With lazy instantiation (all nested configs are lazy)
         model = rc.instantiate(Path("config.yaml"), lazy=True)
@@ -810,19 +946,10 @@ def instantiate(
     """
     path = ensure_path(path)
 
-    # Handle --help/-h when cli_overrides is enabled
-    if cli_overrides and ("--help" in sys.argv or "-h" in sys.argv):
-        integration = current_help_integration()
-
-        # Consume --help/-h from sys.argv if integration requests it
-        if integration.consume_help_flag:
-            sys.argv = [arg for arg in sys.argv if arg not in ("--help", "-h")]
-
-        # Get provenance with type hints and descriptions
-        provenance = get_provenance(path)
-
-        # Call the integration (it's responsible for sys.exit() if needed)
-        integration.integrate(provenance, str(path))
+    # Handle --help/-h when CLI overrides are enabled
+    cli_enabled = _effective_cli_overrides(cli_overrides)
+    if cli_enabled:
+        _handle_help_request(path)
 
     # Compose config (resolve _ref_ and _instance_)
     composer = ConfigComposer()
@@ -840,22 +967,9 @@ def instantiate(
         config,
     )
 
-    # Collect all overrides
-    all_overrides: list[Override] = []
-
-    # Programmatic overrides first
-    if overrides:
-        all_overrides.extend(parse_dict_overrides(overrides))
-
-    # CLI overrides second (wins on conflict)
-    if cli_overrides:
-        all_overrides.extend(extract_cli_overrides(sys.argv[1:]))
-
-    # Validate paths and coerce values
-    for override in all_overrides:
-        expected_type_hint = _validator.validate_override_path(override.path, config)
-        if override.operation == "set" and isinstance(override.value, str):
-            override.value = parse_override_value(override.value, expected_type_hint)
+    # Collect overrides (CLI wins on conflict), validate paths and coerce values
+    all_overrides = _collected_overrides(overrides, cli_enabled)
+    _coerce_override_values(all_overrides, config)
 
     # Apply overrides
     if all_overrides:
@@ -864,7 +978,11 @@ def instantiate(
     # Resolve interpolations (${...} expressions) - always on full config
     from rconfig.interpolation import resolve_interpolations
 
+    unresolved = config
     config = resolve_interpolations(config)
+
+    # Convert strings (env values, interpolation results) to declared field types
+    config = _typed_config(config, unresolved, inner_path=inner_path)
 
     # Handle partial instantiation
     if inner_path is not None:
@@ -969,7 +1087,7 @@ def instantiate_multirun(
     *,
     sweep: dict[str, list[Any]],
     inner_path: str | None = ...,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> MultirunIterator[Any]: ...
 @overload
@@ -979,7 +1097,7 @@ def instantiate_multirun(
     *,
     sweep: dict[str, list[Any]],
     inner_path: str | None = ...,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> MultirunIterator[T]: ...
 @overload
@@ -988,7 +1106,7 @@ def instantiate_multirun(
     *,
     experiments: list[dict[str, Any]],
     inner_path: str | None = ...,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> MultirunIterator[Any]: ...
 @overload
@@ -998,7 +1116,7 @@ def instantiate_multirun(
     *,
     experiments: list[dict[str, Any]],
     inner_path: str | None = ...,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> MultirunIterator[T]: ...
 @overload
@@ -1008,7 +1126,7 @@ def instantiate_multirun(
     sweep: dict[str, list[Any]],
     experiments: list[dict[str, Any]],
     inner_path: str | None = ...,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> MultirunIterator[Any]: ...
 @overload
@@ -1019,7 +1137,7 @@ def instantiate_multirun(
     sweep: dict[str, list[Any]],
     experiments: list[dict[str, Any]],
     inner_path: str | None = ...,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> MultirunIterator[T]: ...
 @overload
@@ -1030,7 +1148,7 @@ def instantiate_multirun(
     experiments: list[dict[str, Any]] | None = ...,
     overrides: dict[str, Any] | None = ...,
     inner_path: str | None = ...,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> MultirunIterator[Any]: ...
 @overload
@@ -1042,7 +1160,7 @@ def instantiate_multirun(
     experiments: list[dict[str, Any]] | None = ...,
     overrides: dict[str, Any] | None = ...,
     inner_path: str | None = ...,
-    cli_overrides: bool = ...,
+    cli_overrides: bool | None = ...,
     lazy: bool = ...,
 ) -> MultirunIterator[T]: ...
 
@@ -1055,7 +1173,7 @@ def instantiate_multirun(
     experiments: list[dict[str, Any]] | None = None,
     overrides: dict[str, Any] | None = None,
     inner_path: str | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     lazy: bool = False,
 ) -> MultirunIterator[T] | MultirunIterator[Any]:
     """Generate and instantiate multiple config combinations from sweeps and experiments.
@@ -1072,7 +1190,8 @@ def instantiate_multirun(
     :param inner_path: Optional path to instantiate only a section of the config.
                        Interpolations are resolved from the full config before
                        extraction. External _instance_ refs are auto-instantiated.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv (default True).
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :param lazy: If True, nested configs delay __init__ until first access.
     :return: MultirunIterator with length, slicing, and reversal support.
     :raises NoRunConfigurationError: If neither sweep nor experiments provided.
@@ -1151,26 +1270,17 @@ def instantiate_multirun(
     if sweep:
         validate_sweep_values(sweep)
 
-    # Handle --help/-h when cli_overrides is enabled
-    if cli_overrides and ("--help" in sys.argv or "-h" in sys.argv):
-        integration = current_help_integration()
-
-        # Consume --help/-h from sys.argv if integration requests it
-        if integration.consume_help_flag:
-            sys.argv = [arg for arg in sys.argv if arg not in ("--help", "-h")]
-
-        # Get provenance with type hints and descriptions
-        provenance = get_provenance(path)
-
-        # Call the integration (it's responsible for sys.exit() if needed)
-        integration.integrate(provenance, str(path))
+    # Handle --help/-h when CLI overrides are enabled
+    cli_enabled = _effective_cli_overrides(cli_overrides)
+    if cli_enabled:
+        _handle_help_request(path)
 
     # Parse CLI multirun arguments
     cli_regular_overrides: list[Override] = []
     cli_sweep: dict[str, list[Any]] = {}
     cli_experiments: list[dict[str, Any]] = []
 
-    if cli_overrides:
+    if cli_enabled:
         cli_regular_overrides, cli_sweep, cli_experiments = extract_cli_multirun_overrides(
             sys.argv[1:]
         )
@@ -1225,10 +1335,7 @@ def instantiate_multirun(
             all_overrides.extend(cli_regular_overrides)
 
             # Validate paths and coerce values
-            for override in all_overrides:
-                expected_type_hint = _validator.validate_override_path(override.path, config)
-                if override.operation == "set" and isinstance(override.value, str):
-                    override.value = parse_override_value(override.value, expected_type_hint)
+            _coerce_override_values(all_overrides, config)
 
             # Apply overrides with _ref_ shorthand for CLI overrides
             if cli_regular_overrides:
@@ -1244,8 +1351,10 @@ def instantiate_multirun(
                 missing = [(m.path, m.expected_type) for m in required_markers]
                 raise RequiredValueError(missing)
 
-            # Resolve interpolations
+            # Resolve interpolations, then convert strings to declared field types
+            unresolved = config
             config = resolve_interpolations(config)
+            config = _typed_config(config, unresolved, inner_path=inner_path)
 
             # Handle partial instantiation
             if inner_path is not None:
@@ -1409,7 +1518,7 @@ def get_provenance(
     *,
     inner_path: str | None = None,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
 ) -> "Provenance":
     """Compose a config file and track the origin of each value.
 
@@ -1417,7 +1526,8 @@ def get_provenance(
     :param inner_path: If specified, returns provenance only for this section.
                       Also uses lazy loading to only load needed files.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv (default True).
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :return: Provenance object with origin information for each config value.
 
     Example::
@@ -1438,8 +1548,8 @@ def get_provenance(
             overrides={"model.lr": 0.01}
         )
 
-        # Disable CLI parsing (for tests/library usage)
-        prov = rc.get_provenance(Path("config.yaml"), cli_overrides=False)
+        # Include CLI overrides for this call
+        prov = rc.get_provenance(Path("config.yaml"), cli_overrides=True)
     """
     from rconfig.interpolation import resolve_interpolations
     from rconfig.provenance import ProvenanceBuilder
@@ -1448,18 +1558,10 @@ def get_provenance(
 
     path = ensure_path(path)
 
-    # Handle --help/-h when cli_overrides is enabled
-    if cli_overrides and ("--help" in sys.argv or "-h" in sys.argv):
-        integration = current_help_integration()
-
-        # Consume --help/-h from sys.argv if integration requests it
-        if integration.consume_help_flag:
-            sys.argv = [arg for arg in sys.argv if arg not in ("--help", "-h")]
-
-        # Recursively call get_provenance without help handling to avoid infinite loop
-        # The help integration will get provenance data and handle display
-        prov = get_provenance(path, inner_path=inner_path, overrides=overrides, cli_overrides=False)
-        integration.integrate(prov, str(path))
+    # Handle --help/-h when CLI overrides are enabled
+    cli_enabled = _effective_cli_overrides(cli_overrides)
+    if cli_enabled:
+        _handle_help_request(path, inner_path=inner_path, overrides=overrides)
 
     # Create builder for accumulating provenance during composition
     builder = ProvenanceBuilder()
@@ -1472,22 +1574,9 @@ def get_provenance(
     instance_resolver = InstanceResolver(builder)
     config = instance_resolver.resolve(result.instances, result.config)
 
-    # Collect all overrides
-    all_overrides: list[Override] = []
-
-    # Programmatic overrides first
-    if overrides:
-        all_overrides.extend(parse_dict_overrides(overrides))
-
-    # CLI overrides second (wins on conflict)
-    if cli_overrides:
-        all_overrides.extend(extract_cli_overrides(sys.argv[1:]))
-
-    # Validate paths and coerce values
-    for override in all_overrides:
-        expected_type_hint = _validator.validate_override_path(override.path, config)
-        if override.operation == "set" and isinstance(override.value, str):
-            override.value = parse_override_value(override.value, expected_type_hint)
+    # Collect overrides (CLI wins on conflict), validate paths and coerce values
+    all_overrides = _collected_overrides(overrides, cli_enabled)
+    _coerce_override_values(all_overrides, config)
 
     # Apply overrides
     if all_overrides:
@@ -1498,7 +1587,15 @@ def get_provenance(
 
     # Resolve interpolations and update builder with interpolation sources
     resolved = resolve_interpolations(config, builder)
-    builder.set_config(resolved)
+
+    # Convert strings to declared field types and record the converted values.
+    # Provenance does not validate, so a value that cannot be converted is kept as-is.
+    coercion = _coercer.coerced(resolved, config)
+    for coerced_path, value in coercion.coerced_paths.items():
+        entry = builder.get_entry(coerced_path)
+        if entry is not None:
+            entry.value = value
+    builder.set_config(coercion.config)
 
     # Resolve target class information from registered targets
     builder.resolve_targets(_store.known_targets)
@@ -1800,13 +1897,14 @@ def _resolved_config(
     path: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
 ) -> tuple[dict[str, Any], ConfigComposer]:
     """Internal helper: run resolution pipeline without instantiation.
 
     :param path: Path to config file. Accepts str, Path, or any os.PathLike.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv.
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :return: Tuple of (resolved config dict, composer instance).
     """
     from rconfig.interpolation import resolve_interpolations
@@ -1814,39 +1912,17 @@ def _resolved_config(
 
     path = ensure_path(path)
 
-    # Handle --help/-h when cli_overrides is enabled
-    if cli_overrides and ("--help" in sys.argv or "-h" in sys.argv):
-        integration = current_help_integration()
-
-        # Consume --help/-h from sys.argv if integration requests it
-        if integration.consume_help_flag:
-            sys.argv = [arg for arg in sys.argv if arg not in ("--help", "-h")]
-
-        # Get provenance with type hints and descriptions
-        provenance = get_provenance(path)
-
-        # Call the integration (it's responsible for sys.exit() if needed)
-        integration.integrate(provenance, str(path))
+    # Handle --help/-h when CLI overrides are enabled
+    cli_enabled = _effective_cli_overrides(cli_overrides)
+    if cli_enabled:
+        _handle_help_request(path)
 
     composer = ConfigComposer()
     config = composer.compose(path)
 
-    # Collect all overrides
-    all_overrides: list[Override] = []
-
-    # Programmatic overrides first
-    if overrides:
-        all_overrides.extend(parse_dict_overrides(overrides))
-
-    # CLI overrides second (wins on conflict)
-    if cli_overrides:
-        all_overrides.extend(extract_cli_overrides(sys.argv[1:]))
-
-    # Validate paths and coerce values
-    for override in all_overrides:
-        expected_type_hint = _validator.validate_override_path(override.path, config)
-        if override.operation == "set" and isinstance(override.value, str):
-            override.value = parse_override_value(override.value, expected_type_hint)
+    # Collect overrides (CLI wins on conflict), validate paths and coerce values
+    all_overrides = _collected_overrides(overrides, cli_enabled)
+    _coerce_override_values(all_overrides, config)
 
     # Apply overrides
     if all_overrides:
@@ -1858,8 +1934,11 @@ def _resolved_config(
         missing = [(m.path, m.expected_type) for m in required_markers]
         raise RequiredValueError(missing)
 
-    # Resolve interpolations
+    # Resolve interpolations, then convert strings to declared field types.
+    # Exports do not validate, so a value that cannot be converted is kept as-is.
+    unresolved = config
     config = resolve_interpolations(config)
+    config = _coercer.coerced(config, unresolved).config
 
     return config, composer
 
@@ -1869,14 +1948,15 @@ def export(
     exporter: Exporter,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
 ) -> Any:
     """Export resolved config using a custom exporter.
 
     :param path: Path to config file. Accepts str, Path, or any os.PathLike.
     :param exporter: Exporter instance to use.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv.
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :return: The exported data in the exporter's target format.
 
     Example::
@@ -1896,14 +1976,15 @@ def to_dict(
     path: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> dict[str, Any]:
     """Export resolved config as a Python dictionary.
 
     :param path: Path to config file. Accepts str, Path, or any os.PathLike.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv.
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :param exclude_markers: If True, remove internal markers (_target_, etc.).
     :return: Resolved config as a dictionary.
 
@@ -1929,14 +2010,15 @@ def to_yaml(
     path: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> str:
     """Export resolved config as a YAML string.
 
     :param path: Path to config file. Accepts str, Path, or any os.PathLike.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv.
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :param exclude_markers: If True, remove internal markers (_target_, etc.).
     :return: Resolved config as a YAML string.
 
@@ -1959,7 +2041,7 @@ def to_json(
     path: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
     indent: int | None = 2,
 ) -> str:
@@ -1967,7 +2049,8 @@ def to_json(
 
     :param path: Path to config file. Accepts str, Path, or any os.PathLike.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv.
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :param exclude_markers: If True, remove internal markers (_target_, etc.).
     :param indent: Number of spaces for indentation, None for compact output.
     :return: Resolved config as a JSON string.
@@ -1994,14 +2077,15 @@ def to_toml(
     path: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> str:
     """Export resolved config as a TOML string.
 
     :param path: Path to config file. Accepts str, Path, or any os.PathLike.
     :param overrides: Dictionary of config overrides using dot notation keys.
-    :param cli_overrides: Whether to parse CLI overrides from sys.argv.
+    :param cli_overrides: Whether to parse CLI overrides and --help from sys.argv.
+                          None (default) uses set_cli_overrides(), which is off unless enabled.
     :param exclude_markers: If True, remove internal markers (_target_, etc.).
     :return: Resolved config as a TOML string.
 
@@ -2026,7 +2110,7 @@ def to_file(
     output_path: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> None:
     """Export config to a single file with format auto-detection.
@@ -2037,7 +2121,7 @@ def to_file(
     :param source: Source config (str, Path, os.PathLike to file, or dict).
     :param output_path: Output file path (extension determines format). Accepts str, Path, or any os.PathLike.
     :param overrides: Config overrides (only used with Path input).
-    :param cli_overrides: Parse CLI overrides (only used with Path input).
+    :param cli_overrides: Parse CLI overrides (only used with Path input; None uses set_cli_overrides()).
     :param exclude_markers: If True, remove internal markers (_target_, etc.).
     :raises ConfigFileError: If the output file extension is not supported.
 
@@ -2065,7 +2149,7 @@ def _to_file_from_path(
     output_path: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> None:
     config, _ = _resolved_config(
@@ -2081,7 +2165,7 @@ def _to_file_from_str(
     output_path: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> None:
     config, _ = _resolved_config(
@@ -2108,7 +2192,7 @@ def to_files(
     config_root_file: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> None:
     """Export config preserving file structure with format auto-detection.
@@ -2125,7 +2209,7 @@ def to_files(
     :param source: Source config (str, Path, os.PathLike to file, or dict).
     :param config_root_file: Output root file path (extension determines root format). Accepts str, Path, or any os.PathLike.
     :param overrides: Config overrides (only used with Path input).
-    :param cli_overrides: Parse CLI overrides (only used with Path input).
+    :param cli_overrides: Parse CLI overrides (only used with Path input; None uses set_cli_overrides()).
     :param exclude_markers: If True, remove internal markers (_target_, etc.).
     :raises ConfigFileError: If an output file extension is not supported.
 
@@ -2150,7 +2234,7 @@ def _to_files_from_path(
     config_root_file: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> None:
     config, composer = _resolved_config(
@@ -2172,7 +2256,7 @@ def _to_files_from_str(
     config_root_file: StrOrPath,
     *,
     overrides: dict[str, Any] | None = None,
-    cli_overrides: bool = True,
+    cli_overrides: bool | None = None,
     exclude_markers: bool = False,
 ) -> None:
     source_path = ensure_path(source)
@@ -2626,6 +2710,9 @@ __all__ = [
     # Lazy instantiation utilities
     "is_lazy_proxy",
     "force_initialize",
+    # CLI override policy API
+    "set_cli_overrides",
+    "cli_overrides_enabled",
     # Help integration API
     "set_help_integration",
     "current_help_integration",
@@ -2703,6 +2790,7 @@ __all__ = [
     "TargetTypeMismatchError",
     "TypeInferenceError",
     "TypeMismatchError",
+    "ValueCoercionError",
     "UnknownResolverError",
     "ValidationError",
 ]

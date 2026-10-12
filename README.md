@@ -1,9 +1,9 @@
 # ReausoConfig
 
-[![Tests](https://github.com/reauso/ReausoConfig/actions/workflows/tests.yml/badge.svg)](https://github.com/reauso/ReausoConfig/actions/workflows/tests.yml)
+[![Tests](https://github.com/reauso-studio/ReausoConfig/actions/workflows/tests.yml/badge.svg)](https://github.com/reauso-studio/ReausoConfig/actions/workflows/tests.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-reauso.github.io-blue)](https://reauso.github.io/ReausoConfig/)
+[![Docs](https://img.shields.io/badge/docs-reauso--studio.github.io-blue)](https://reauso-studio.github.io/ReausoConfig/)
 
 A Python configuration library that turns YAML, JSON, and TOML files into Python objects with minimal runtime coupling.
 
@@ -17,17 +17,26 @@ ReausoConfig loads configuration files and instantiates fully-connected object g
 - **Config composition** — Split configs across files with `_ref_` references and deep merge
 - **Type-driven resolution** — Automatic target inference from type hints
 - **Interpolation** — `${...}` expressions with environment variables, math, and conditionals
+- **Typed environment values** — `"false"`, `"8080"` or `"a, b"` from env vars are converted to the field's declared `bool`, `int`, `list[str]`, enum, ...
 - **Lazy instantiation** — Defer object creation until first access
 - **Provenance tracking** — Know where every config value came from
 - **Config diffing** — Compare configurations programmatically
-- **CLI overrides** — Override any config value from the command line
+- **CLI overrides** — Override any config value from the command line (opt-in)
 - **Multirun support** — Generate config combinations for parameter sweeps
 - **Lifecycle hooks** — React to config loading, instantiation, and errors
 
 ## Installation
 
 ```bash
-pip install git+https://github.com/reauso/ReausoConfig.git
+pip install reausoconfig
+```
+
+The distribution is named `ReausoConfig`; the import name is `rconfig`. Note that `pip install rconfig` installs an unrelated package.
+
+To install the latest development version from GitHub:
+
+```bash
+pip install git+https://github.com/reauso-studio/ReausoConfig.git
 ```
 
 ### Development Setup
@@ -129,19 +138,26 @@ Use `${...}` expressions for dynamic values:
 
 ```yaml
 _target_: training
-data_dir: ${env:DATA_DIR, ./data}      # Environment variable with default
+data_dir: '${env:DATA_DIR ?: "./data"}'   # Environment variable with default
 batch_size: 32
-total_samples: ${= 1000 * 32}          # Math expressions
-output: ${data_dir}/results             # Reference other fields
-gpu: ${if:${env:USE_GPU, false}, cuda:0, cpu}  # Conditionals
+total_samples: ${1000 * 32}               # Math expressions
+output: ${data_dir}/results               # Reference other fields
+use_gpu: '${env:USE_GPU ?: false}'        # Env strings are converted to the field type
+device: '${/batch_size > 16 ? "cuda:0" : "cpu"}'  # Conditionals
 ```
 
 ## CLI Overrides
 
-Override any config value from the command line without modifying files:
+Override any config value from the command line without modifying files. CLI parsing is off by default (so `sys.argv` of a host application is never touched); enable it in scripts:
 
 ```python
-service = rc.instantiate(path="service.yaml", cli_args=["db.port=3306", "name=prod"])
+rc.set_cli_overrides(True)  # or pass cli_overrides=True per call
+service = rc.instantiate(path="service.yaml")
+```
+
+```bash
+python main.py db.port=3306 name=prod
+python main.py --help  # List all configurable values
 ```
 
 ## Type-Driven Polymorphism
@@ -177,12 +193,14 @@ optimizer:
 
 ## Documentation
 
-Full documentation is available at [reauso.github.io/ReausoConfig](https://reauso.github.io/ReausoConfig/), including:
+Full documentation is available at [reauso-studio.github.io/ReausoConfig](https://reauso-studio.github.io/ReausoConfig/), including:
 
-- [Getting Started](https://reauso.github.io/ReausoConfig/getting-started/) — Full installation and walkthrough
-- [Core Concepts](https://reauso.github.io/ReausoConfig/core-concepts/) — ConfigStore, validation, resolution pipeline
-- [Config Composition](https://reauso.github.io/ReausoConfig/composition/) — `_ref_`, `_instance_`, deep merge, CLI overrides
-- [API Reference](https://reauso.github.io/ReausoConfig/api-reference/) — Complete function and type reference
+- [Getting Started](https://reauso-studio.github.io/ReausoConfig/getting-started/) — Full installation and walkthrough
+- [Core Concepts](https://reauso-studio.github.io/ReausoConfig/core-concepts/) — ConfigStore, validation, resolution pipeline
+- [Config Composition](https://reauso-studio.github.io/ReausoConfig/composition/) — `_ref_`, `_instance_`, deep merge, CLI overrides
+- [Type Coercion](https://reauso-studio.github.io/ReausoConfig/type-coercion/) — How string values (env vars) become typed values
+- [Embedding in Applications](https://reauso-studio.github.io/ReausoConfig/embedding/) — Using ReausoConfig in web apps, workers and tests
+- [API Reference](https://reauso-studio.github.io/ReausoConfig/api-reference/) — Complete function and type reference
 
 ## License
 

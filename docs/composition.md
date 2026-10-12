@@ -176,6 +176,18 @@ Override config values from the command line:
 python main.py model.hidden_size=512 epochs=20
 ```
 
+CLI overrides are **opt-in**. By default ReausoConfig never reads `sys.argv`, so loading config inside a web app, worker or test runner cannot be affected by the host program's arguments. Enable them once at the start of a script, or per call:
+
+```python
+rc.set_cli_overrides(True)  # Process-wide, e.g. at the top of train.py
+trainer = rc.instantiate(path=Path("config.yaml"))
+
+# Or only for one call
+trainer = rc.instantiate(path=Path("config.yaml"), cli_overrides=True)
+```
+
+A per-call `cli_overrides=True`/`False` always takes precedence over `rc.set_cli_overrides()`.
+
 Or programmatically:
 
 ```python
@@ -219,9 +231,11 @@ python train.py model=models/vit.yaml
 python train.py model="models/vit.yaml"  # Literal string, not a ref
 ```
 
+CLI values are converted to the declared field types with the same rules as [environment values](type-coercion.md), except that a comma does not split a list: write `tags=[a, b]` for a list, because `tags=a,b` means a [sweep](multirun-and-hooks.md#cli-syntax) in multirun.
+
 ### Disabling CLI Overrides
 
-For tests or library usage, disable automatic CLI parsing:
+If CLI overrides are enabled process-wide, you can still ignore `sys.argv` for a single call:
 
 ```python
 model = rc.instantiate(path=Path("config.yaml"), cli_overrides=False)
@@ -229,7 +243,7 @@ model = rc.instantiate(path=Path("config.yaml"), cli_overrides=False)
 
 ### CLI Help
 
-When `cli_overrides=True` (default), all CLI-enabled functions support `--help` or `-h`:
+When CLI overrides are enabled (`rc.set_cli_overrides(True)` or `cli_overrides=True`), all CLI-enabled functions support `--help` or `-h`:
 
 ```bash
 python main.py --help
@@ -259,6 +273,8 @@ Override with: python script.py key=value
 - `rc.to_file()`
 - `rc.to_files()`
 - `rc.export()`
+
+The help output never applies the other CLI overrides, so a malformed argument cannot prevent `--help` from showing. `--help`/`-h` is removed from `sys.argv` when it is handled.
 
 **Custom help formatting:**
 

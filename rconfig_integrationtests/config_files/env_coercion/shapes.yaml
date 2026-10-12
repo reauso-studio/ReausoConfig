@@ -1,0 +1,4 @@
+_target_: env_shapes
+# Env references without a default and with the ?? operator, both into int fields
+bare_port: '${env:RCT_PORT}'
+coalesce_port: '${env:RCT_PORT ?? 8080}'

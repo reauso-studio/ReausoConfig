@@ -29,7 +29,7 @@ for result in rc.instantiate_multirun(
 
 ### CLI Syntax
 
-Sweep parameters and experiments can be specified via command line:
+Sweep parameters and experiments can be specified via command line once CLI overrides are enabled (`rc.set_cli_overrides(True)` at the start of the script, or `cli_overrides=True` on `rc.instantiate_multirun()`); by default `sys.argv` is ignored:
 
 ```bash
 # Comma-separated sweep values (cartesian product)

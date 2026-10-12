@@ -1,0 +1,4 @@
+_target_: env_chained
+# A config reference to an env-sourced value
+base_port: '${env:RCT_PORT ?: 8080}'
+derived_port: '${/base_port}'

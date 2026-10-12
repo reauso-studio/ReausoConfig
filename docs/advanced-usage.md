@@ -73,6 +73,7 @@ ConfigError (base)
 ├── ValidationError               # Validation failures
 │   ├── MissingFieldError             # Required field missing
 │   ├── TypeMismatchError             # Wrong type provided
+│   │   └── ValueCoercionError            # String value cannot be converted to the field type
 │   ├── AmbiguousTargetError          # Cannot infer type (abstract/multiple impls)
 │   ├── TargetTypeMismatchError       # Explicit _target_ wrong type
 │   ├── TypeInferenceError            # Inferred type validation failed
@@ -182,7 +183,7 @@ b: 42
 
 **Cause:** Config contains `_required_` markers that weren't satisfied by overrides, CLI arguments, or environment variables.
 
-**Fix:** Provide values via `overrides={"key": value}`, CLI arguments (`key=value`), or environment variable [interpolation](interpolation.md) (`${env:KEY}`).
+**Fix:** Provide values via `overrides={"key": value}`, CLI arguments (`key=value`, when [CLI overrides are enabled](composition.md#cli-overrides)), or environment variable [interpolation](interpolation.md) (`${env:KEY}`).
 
 ### `RefAtRootError`
 

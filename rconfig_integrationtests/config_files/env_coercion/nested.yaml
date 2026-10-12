@@ -1,0 +1,5 @@
+_target_: env_nested
+# Env-sourced value inside a nested dataclass
+server:
+  _target_: env_server
+  port: '${env:RCT_PORT ?: 8080}'

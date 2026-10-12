@@ -5,6 +5,7 @@ and determining if types can be used as config targets.
 """
 
 import inspect
+import types
 from collections.abc import (
     Mapping,
     MutableMapping,
@@ -49,6 +50,18 @@ def _newtype_supertype(hint: Any) -> type | None:
     if supertype is not None and not isinstance(hint, type):
         return supertype
     return None
+
+
+def is_union_hint(hint: Any) -> bool:
+    """Check if a type hint is a union, in either spelling.
+
+    Covers ``typing.Union[X, Y]`` / ``Optional[X]`` as well as the PEP 604
+    ``X | Y`` syntax, whose origin is ``types.UnionType``.
+
+    :param hint: Type hint to check.
+    :return: True if hint is a union type.
+    """
+    return get_origin(hint) in (Union, types.UnionType)
 
 
 def is_class_type(hint: type) -> bool:
@@ -108,7 +121,7 @@ def extract_class_from_hint(hint: type) -> type | None:
     args = get_args(hint)
 
     # Handle Optional[X] which is Union[X, None]
-    if origin is Union:
+    if is_union_hint(hint):
         non_none_args = [a for a in args if a is not type(None)]
         if len(non_none_args) == 1:
             # It's Optional[X], check if X is a class
@@ -149,7 +162,7 @@ def could_be_implicit_nested(value: Any, expected_type: type | None) -> bool:
 
     # Also allow union types through for structural matching
     unwrapped = unwrapped_hint(expected_type)
-    return get_origin(unwrapped) is Union
+    return is_union_hint(unwrapped)
 
 
 def find_registered_subclasses(store: TargetRegistry, base_class: type) -> list[str]:
@@ -279,8 +292,7 @@ def unwrapped_hint(hint: type) -> type:
         return unwrapped_hint(get_args(hint)[0])
 
     # Handle Optional[X] (Union[X, None])
-    origin = get_origin(hint)
-    if origin is Union:
+    if is_union_hint(hint):
         args = get_args(hint)
         non_none = [a for a in args if a is not type(None)]
         if len(non_none) == 1:
@@ -345,8 +357,7 @@ def resolved_union_candidate(
     :param store: TargetRegistry.
     :return: The matched type, or None if no unique match.
     """
-    origin = get_origin(hint)
-    if origin is not Union:
+    if not is_union_hint(hint):
         return None
 
     args = get_args(hint)
@@ -494,8 +505,7 @@ def _value_is_type_compatible(value: Any, expected_type: type) -> bool:
         ) or expected_type in (list, tuple)
 
     # Check union compatibility
-    origin = get_origin(expected_type)
-    if origin is Union:
+    if is_union_hint(expected_type):
         args = get_args(expected_type)
         return any(_value_is_type_compatible(value, a) for a in args)
 

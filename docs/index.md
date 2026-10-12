@@ -16,10 +16,11 @@ After instantiation, you get pure Python objects with no framework dependency.
 - **Config composition** — Split configs across files with `_ref_` references and deep merge
 - **Type-driven resolution** — Automatic target inference from type hints
 - **Interpolation** — `${...}` expressions with environment variables, math, and conditionals
+- **Typed environment values** — String values from env vars are [converted](type-coercion.md) to the declared `bool`, `int`, enum, `list[str]`, ...
 - **Lazy instantiation** — Defer object creation until first access
 - **Provenance tracking** — Know where every config value came from
 - **Config diffing** — Compare configurations programmatically
-- **CLI overrides** — Override any config value from the command line
+- **CLI overrides** — Override any config value from the command line (opt-in via `rc.set_cli_overrides(True)`)
 - **Multirun support** — Generate config combinations for parameter sweeps
 - **Lifecycle hooks** — React to config loading, instantiation, and errors
 
@@ -53,4 +54,6 @@ dropout: 0.2
 
 - [Getting Started](getting-started.md) — Installation and a full walkthrough
 - [Core Concepts](core-concepts.md) — Understand the fundamentals
+- [Type Coercion](type-coercion.md) — How env and other string values become typed values
+- [Embedding in Applications](embedding.md) — Using ReausoConfig in web apps, workers and tests
 - [API Reference](api-reference.md) — Complete function and type reference

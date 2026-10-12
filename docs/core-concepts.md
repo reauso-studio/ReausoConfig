@@ -11,7 +11,7 @@ _target_: my_model  # Required at root level
 learning_rate: 0.001
 ```
 
-**Nested configs:** For nested configuration blocks, `_target_` is **optional** when the parent class has a type hint pointing to a concrete, registered class. See [Target Resolution](object-instantiation.md#target-resolution) for details on when `_target_` can be omitted.
+**Nested configs:** For nested configuration blocks, `_target_` is **optional** when the parent class has a type hint pointing to a concrete class (not abstract and without multiple registered subclasses). The nested class does not need to be registered; it is inferred from the type hint and registered automatically. Only the root target must be registered. See [Target Resolution](object-instantiation.md#target-resolution) for details on when `_target_` can be omitted.
 
 ## ConfigStore
 
@@ -60,7 +60,7 @@ These keys are stripped from the config before instantiation and are not passed 
 Before instantiation, configs are validated for:
 
 - Required fields (parameters without defaults)
-- Type compatibility
+- Type compatibility (string values such as environment variables are first [converted](type-coercion.md) to the declared type)
 - Target existence in registry
 
 ## Resolution Pipeline
@@ -70,8 +70,9 @@ When you call `rc.instantiate()`, the following steps execute in order:
 ```
 1. LOAD        Parse the config file (YAML, JSON, or TOML)
 2. COMPOSE     Resolve all _ref_ references and deep merge
-3. OVERRIDE    Apply programmatic overrides, then CLI overrides (CLI wins)
-4. INTERPOLATE Resolve all ${...} expressions
+3. OVERRIDE    Apply programmatic overrides, then CLI overrides if enabled (CLI wins)
+4. INTERPOLATE Resolve all ${...} expressions, then convert string values to
+               the declared field types (see Type Coercion)
 5. EXTRACT     If inner_path is specified, extract that section
 6. VALIDATE    Check required values and type compatibility
 7. INSTANTIATE Recursively create objects via registered constructors

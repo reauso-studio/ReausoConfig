@@ -1,0 +1,3 @@
+_target_: claims_resolver
+# A raising resolver must not be swallowed by the ?: fallback
+value: '${app:rct_boom ?: 1}'

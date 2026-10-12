@@ -15,7 +15,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass, field
 from inspect import Parameter
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any, TypeVar, get_args, get_origin, get_type_hints
 
 from rconfig.target import TargetRegistry, TargetEntry
 from rconfig.errors import (
@@ -36,6 +36,7 @@ from rconfig._internal.type_utils import (
     extract_class_from_hint,
     is_class_type,
     is_concrete_type,
+    is_union_hint,
     register_inferred_target,
 )
 
@@ -372,12 +373,15 @@ class ConfigValidator:
 
     def _type_matches(self, value: Any, expected_type: type) -> bool:
         """Check if a value matches an expected type."""
+        if self._is_unconstrained_type(expected_type):
+            return True
+
         origin = get_origin(expected_type)
         args = get_args(expected_type)
 
         if value is None:
             return self._matches_none_type(expected_type, origin, args)
-        if origin is Union:
+        if is_union_hint(expected_type):
             return self._matches_union_type(value, args)
         if origin in _LIST_LIKE_ORIGINS:
             return self._matches_list_type(value, args)
@@ -388,11 +392,15 @@ class ConfigValidator:
         # Unhandled parameterized generic (e.g., Callable)
         return False
 
+    def _is_unconstrained_type(self, expected_type: Any) -> bool:
+        """Check if a type hint accepts any value (Any, object, or a TypeVar)."""
+        return expected_type is Any or expected_type is object or isinstance(expected_type, TypeVar)
+
     def _matches_none_type(
         self, expected_type: type, origin: type | None, args: tuple[type, ...]
     ) -> bool:
         """Check if None matches the expected type."""
-        if origin is Union and type(None) in args:
+        if is_union_hint(expected_type) and type(None) in args:
             return True
         return expected_type is type(None)
 
@@ -438,7 +446,7 @@ class ConfigValidator:
         origin = get_origin(t)
         args = get_args(t)
 
-        if origin is Union:
+        if is_union_hint(t):
             if type(None) in args:
                 non_none = [a for a in args if a is not type(None)]
                 if len(non_none) == 1:

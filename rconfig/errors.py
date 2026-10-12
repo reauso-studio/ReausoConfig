@@ -4,10 +4,15 @@ This module defines the exception hierarchy used throughout the library
 for configuration loading, validation, and instantiation errors.
 """
 
+import re
 from pathlib import Path
 from typing import Any
 
 from rconfig._internal.path_utils import StrOrPath, ensure_path
+
+
+# Matches environment variable references inside an interpolation expression
+_ENV_REFERENCE_PATTERN = re.compile(r"env:([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def _format_location(config_path: str) -> str:
@@ -127,6 +132,52 @@ class TypeMismatchError(ValidationError):
             f"Type mismatch for field '{field}'{location}: "
             f"expected {expected_name}, got {actual.__name__}\n"
             f"Hint: Provide a value of type '{expected_name}' or check your config.",
+            config_path,
+        )
+
+
+class ValueCoercionError(TypeMismatchError):
+    """Raised when a string value cannot be converted to the field's declared type.
+
+    String values from environment variables, interpolations or quoted YAML are
+    converted to the declared type before validation. This error reports a
+    value that could not be converted, along with the expression it came from.
+
+    :param field: Name of the field (with index for list items, e.g. "ports[0]").
+    :param expected: Readable name of the expected type.
+    :param value: The string value that could not be converted.
+    :param reason: Why the conversion failed.
+    :param config_path: Full config path of the value (e.g. "server.port").
+    :param source_expression: The unresolved interpolation the value came from, if any.
+    """
+
+    def __init__(
+        self,
+        field: str,
+        expected: str,
+        value: str,
+        reason: str,
+        config_path: str = "",
+        source_expression: str | None = None,
+    ) -> None:
+        self.field = field
+        self.expected = expected
+        self.actual = type(value)
+        self.value = value
+        self.reason = reason
+        self.source_expression = source_expression
+        self.env_vars = tuple(_ENV_REFERENCE_PATTERN.findall(source_expression or ""))
+
+        location = _format_location(config_path)
+        origin = ""
+        if source_expression is not None:
+            origin = f"\nValue came from '{source_expression}'"
+            if self.env_vars:
+                origin += f" (environment variable {', '.join(self.env_vars)})"
+        ValidationError.__init__(
+            self,
+            f"Invalid value for field '{field}'{location}: {reason}{origin}\n"
+            f"Hint: Provide a value that can be read as '{expected}'.",
             config_path,
         )
 
@@ -589,7 +640,7 @@ class CircularInterpolationError(InterpolationError):
 
 
 class EnvironmentVariableError(InterpolationError):
-    """Raised when a required environment variable is not set.
+    """Raised when a required environment variable is not set or is empty.
 
     :param var_name: Name of the missing environment variable.
     :param config_path: Path in config where the error occurred.
@@ -601,7 +652,7 @@ class EnvironmentVariableError(InterpolationError):
 
         location = f" at '{config_path}'" if config_path else ""
         super().__init__(
-            f"Environment variable '{var_name}' is not set{location}\n"
+            f"Environment variable '{var_name}' is not set or is empty{location}\n"
             f"Hint: Set the environment variable or use a coalesce operator for a fallback: "
             f"${{env:{var_name} ?: \"default\"}}"
         )

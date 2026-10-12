@@ -2,7 +2,7 @@
 
 This module provides parsing for interpolation expressions like:
 - Config references: ${/model.lr}, ${./local}, ${model.lr}
-- Environment variables: ${env:PATH}, ${env:HOME,/default}
+- Environment variables: ${env:PATH}, ${env:HOME ?: "/default"}
 - Expressions: ${/a * 2 + /b}, ${/list[0]}, ${/items | filter(x > 0)}
 
 Thread-safe: The InterpolationParser singleton is protected by an internal lock.

@@ -1,5 +1,7 @@
 """Tests for the override module."""
 
+from enum import StrEnum
+from typing import Optional
 from unittest import TestCase
 
 from rconfig.errors import InvalidOverrideSyntaxError
@@ -1361,3 +1363,119 @@ class ApplyCliOverridesWithRefShorthandTests(TestCase):
         apply_cli_overrides_with_ref_shorthand(config, overrides)
 
         self.assertEqual(config, {"model": {"_target_": "resnet"}})
+
+
+class LogLevel(StrEnum):
+    """Enum used to test coercion of string values to enum members."""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+
+
+class ParseOverrideValueTypeCoercionTests(TestCase):
+    """Tests for coercing override strings to union, list and enum type hints."""
+
+    def test_parse__Pep604OptionalIntWithInt__ReturnsInt(self):
+        """Test that '5' is coerced to int for an ``int | None`` hint."""
+        # Act
+        result = parse_override_value("5", int | None)
+
+        # Assert
+        self.assertEqual(result, 5)
+        self.assertIsInstance(result, int)
+
+    def test_parse__Pep604OptionalIntWithNoneToken__ReturnsNone(self):
+        """Test that 'none' is coerced to None for an ``int | None`` hint."""
+        # Act
+        result = parse_override_value("none", int | None)
+
+        # Assert
+        self.assertIsNone(result)
+
+    def test_parse__TypingOptionalIntWithInt__ReturnsInt(self):
+        """Test that '5' is coerced to int for an ``Optional[int]`` hint."""
+        # Act
+        result = parse_override_value("5", Optional[int])
+
+        # Assert
+        self.assertEqual(result, 5)
+        self.assertIsInstance(result, int)
+
+    def test_parse__ListOfStrWithCommaSeparatedValue__KeepsString(self):
+        """Test that CLI overrides do not split 'a, b'; use '[a, b]' for lists.
+
+        Comma-separated values are sweeps in multirun, so overrides keep YAML
+        list syntax. The string is left for validation to reject.
+        """
+        # Act
+        result = parse_override_value("localhost, 127.0.0.1", list[str])
+
+        # Assert
+        self.assertEqual(result, "localhost, 127.0.0.1")
+
+    def test_parse__IntWithInterpolation__ReturnsRawForLaterCoercion(self):
+        """Test that interpolations are kept as-is and coerced after resolution."""
+        # Act
+        result = parse_override_value("${env:PORT}", int)
+
+        # Assert
+        self.assertEqual(result, "${env:PORT}")
+
+    def test_parse__ListOfStrWithYamlNumbers__ReturnsStrItems(self):
+        """Test that '[1, 2]' yields string elements for a ``list[str]`` hint."""
+        # Act
+        result = parse_override_value("[1, 2]", list[str])
+
+        # Assert
+        self.assertEqual(result, ["1", "2"])
+
+    def test_parse__ListOfStrWithYamlList__ReturnsList(self):
+        """Test that a YAML list literal is parsed for a ``list[str]`` hint."""
+        # Act
+        result = parse_override_value("[localhost, example.com]", list[str])
+
+        # Assert
+        self.assertEqual(result, ["localhost", "example.com"])
+
+    def test_parse__StrEnumWithValidValue__ReturnsMember(self):
+        """Test that a valid value is coerced to the enum member."""
+        # Act
+        result = parse_override_value("INFO", LogLevel)
+
+        # Assert
+        self.assertIs(result, LogLevel.INFO)
+
+    def test_parse__StrEnumWithInvalidValue__ErrorListsValidMembers(self):
+        """Test that an invalid enum value names the valid members."""
+        # Act & Assert
+        with self.assertRaises(ValueError) as ctx:
+            parse_override_value("VERBOSE", LogLevel)
+
+        self.assertIn("DEBUG", str(ctx.exception))
+        self.assertIn("INFO", str(ctx.exception))
+
+    def test_parse__BoolWithFalsyTokens__ReturnsFalse(self):
+        """Test that all documented falsy tokens are coerced to False."""
+        for token in ("False", "false", "FALSE", "0", "no", "off"):
+            with self.subTest(token=token):
+                # Act
+                result = parse_override_value(token, bool)
+
+                # Assert
+                self.assertIs(result, False)
+
+    def test_parse__BoolWithTruthyTokens__ReturnsTrue(self):
+        """Test that all documented truthy tokens are coerced to True."""
+        for token in ("True", "true", "TRUE", "1", "yes", "on"):
+            with self.subTest(token=token):
+                # Act
+                result = parse_override_value(token, bool)
+
+                # Assert
+                self.assertIs(result, True)
+
+    def test_parse__BoolWithTypo__RaisesValueError(self):
+        """Test that an unrecognised boolean token raises instead of reading as False."""
+        # Act & Assert
+        with self.assertRaises(ValueError):
+            parse_override_value("ture", bool)

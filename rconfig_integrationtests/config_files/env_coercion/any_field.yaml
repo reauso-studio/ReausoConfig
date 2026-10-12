@@ -1,0 +1,3 @@
+_target_: env_any
+# Env-sourced value for a field typed Any
+anything: '${env:RCT_DEBUG ?: false}'

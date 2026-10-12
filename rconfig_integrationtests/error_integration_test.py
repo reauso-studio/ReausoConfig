@@ -381,8 +381,8 @@ class TypeMismatchErrorTests(ErrorIntegrationTestBase):
         # expected can be a type or string representation
         self.assertIn("int", str(result.errors[0].expected).lower())
 
-    def test_validate__WrongFieldType_StringForList__ReturnsTypeMismatchError(self):
-        """String value for list field returns TypeMismatchError."""
+    def test_validate__WrongFieldType_IntForList__ReturnsTypeMismatchError(self):
+        """Int value for list field returns TypeMismatchError."""
         config_path = ERROR_CONFIG_DIR / "validation_errors" / "wrong_list_type.yaml"
 
         result = rc.validate(config_path)

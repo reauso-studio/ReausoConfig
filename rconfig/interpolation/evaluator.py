@@ -737,12 +737,16 @@ class ExpressionEvaluator(Transformer):
 
     @v_args(inline=True)
     def env_ref_required(self, name: Token) -> EvalResult:
-        """Handle required env var: env:PATH."""
+        """Handle required env var: env:PATH.
+
+        An empty value counts as unset, so ``VAR=`` in a ``.env`` file falls
+        back to a coalesce default instead of producing an empty string.
+        """
         from rconfig.errors import EnvironmentVariableError
 
         var_name = str(name)
         value = self._env_getter(var_name)
-        if value is None:
+        if value is None or value == "":
             raise EnvironmentVariableError(var_name)
 
         return EvalResult(

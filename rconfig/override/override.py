@@ -9,7 +9,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from rconfig.coercion import coerced_value
 from rconfig.errors import InvalidOverrideSyntaxError
+from rconfig.interpolation.parser import has_interpolation
 from rconfig._internal.path_utils import PathNavigationError, navigate_path
 
 
@@ -107,6 +109,10 @@ def parse_override_value(raw: str, expected_type: type | None = None) -> Any:
        - Float pattern -> float
        - Everything else -> string
     """
+    # Interpolations are resolved later and coerced with the rest of the config
+    if has_interpolation(raw):
+        return raw
+
     # If expected type is provided, try to coerce
     if expected_type is not None:
         return _coerce_to_type(raw, expected_type)
@@ -116,40 +122,12 @@ def parse_override_value(raw: str, expected_type: type | None = None) -> Any:
 
 
 def _coerce_to_type(raw: str, expected_type: type) -> Any:
-    """Coerce a string value to the expected type."""
-    # Handle None type
-    if expected_type is type(None):
-        if raw.lower() in ("none", "null", "~"):
-            return None
-        raise ValueError(f"Cannot convert '{raw}' to None")
+    """Coerce a string value to the expected type.
 
-    # Handle bool specially (before int, since bool is subclass of int)
-    if expected_type is bool:
-        if raw.lower() in ("true", "yes", "1", "on"):
-            return True
-        if raw.lower() in ("false", "no", "0", "off"):
-            return False
-        raise ValueError(f"Cannot convert '{raw}' to bool")
-
-    # Handle basic types
-    if expected_type in (int, float, str):
-        try:
-            return expected_type(raw)
-        except ValueError as e:
-            raise ValueError(f"Cannot convert '{raw}' to {expected_type.__name__}") from e
-
-    # Handle list and dict by parsing as YAML
-    if expected_type is list or (hasattr(expected_type, "__origin__") and expected_type.__origin__ is list):
-        return _parse_yaml_value(raw)
-
-    if expected_type is dict or (hasattr(expected_type, "__origin__") and expected_type.__origin__ is dict):
-        return _parse_yaml_value(raw)
-
-    # Fallback: try direct conversion
-    try:
-        return expected_type(raw)
-    except (ValueError, TypeError) as e:
-        raise ValueError(f"Cannot convert '{raw}' to {expected_type}") from e
+    CLI overrides keep YAML list syntax (``[a, b]``) for list fields, since
+    ``key=a,b`` already means a sweep for multirun.
+    """
+    return coerced_value(raw, expected_type, construct_unknown=True)
 
 
 def _infer_value_type(raw: str) -> Any:

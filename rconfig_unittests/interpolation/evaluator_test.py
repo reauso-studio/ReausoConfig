@@ -585,5 +585,59 @@ class CombinedOperatorsEvaluatorTests(unittest.TestCase):
         self.assertIsInstance(ctx.exception.orig_exc, ResolverExecutionError)
 
 
+class EnvRefEvaluatorTests(unittest.TestCase):
+    """Tests for environment variable reference evaluation."""
+
+    def setUp(self) -> None:
+        self.parser = InterpolationParser()
+        self.registry = MagicMock(spec=ResolverRegistry.wrapped_class)
+
+    def _evaluate(self, expression: str, env: dict[str, str]) -> EvalResult:
+        """Helper to parse and evaluate an expression against a fake environment."""
+        tree = self.parser.parse(expression)
+        evaluator = ExpressionEvaluator(
+            config={},
+            registry=self.registry,
+            env_getter=env.get,
+        )
+        return evaluator.transform(tree)
+
+    def test_env_ref__SetValue__ReturnsRawStringWithEnvSource(self):
+        """Test that env values are returned as raw strings, uncoerced."""
+        # Act
+        result = self._evaluate("env:DEBUG", {"DEBUG": "false"})
+
+        # Assert
+        self.assertEqual(result.value, "false")
+        self.assertEqual(result.source.kind, "env")
+        self.assertEqual(result.source.env_var, "DEBUG")
+
+    def test_env_ref__SetValueWithElvis__ReturnsEnvSource(self):
+        """Test that a set env var short-circuits ?: and keeps the env source."""
+        # Act
+        result = self._evaluate("env:PORT ?: 8080", {"PORT": "9000"})
+
+        # Assert
+        self.assertEqual(result.value, "9000")
+        self.assertEqual(result.source.kind, "env")
+
+    def test_env_ref__UnsetValueWithElvis__ReturnsTypedLiteral(self):
+        """Test that an unset env var falls back to the literal with its type."""
+        # Act
+        result = self._evaluate("env:PORT ?: 8080", {})
+
+        # Assert
+        self.assertEqual(result.value, 8080)
+        self.assertIsInstance(result.value, int)
+
+    def test_env_ref__EmptyValueWithElvis__UsesDefault(self):
+        """Test that an empty env var falls back to the ?: default."""
+        # Act
+        result = self._evaluate("env:PORT ?: 8080", {"PORT": ""})
+
+        # Assert
+        self.assertEqual(result.value, 8080)
+
+
 if __name__ == "__main__":
     unittest.main()

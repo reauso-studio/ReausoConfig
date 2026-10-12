@@ -1,0 +1,6 @@
+_target_: env_scalars
+# Env-sourced values for scalar fields typed bool, int, float and str
+debug: '${env:RCT_DEBUG ?: false}'
+port: '${env:RCT_PORT ?: 8080}'
+ratio: '${env:RCT_RATIO ?: 0.5}'
+name: '${env:RCT_NAME ?: "app"}'

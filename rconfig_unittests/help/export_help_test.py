@@ -54,7 +54,7 @@ class ToDictHelpTests(ExportHelpTestBase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.to_dict(config_path)
+            rc.to_dict(config_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -101,7 +101,7 @@ class ToYamlHelpTests(ExportHelpTestBase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.to_yaml(config_path)
+            rc.to_yaml(config_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -148,7 +148,7 @@ class ToJsonHelpTests(ExportHelpTestBase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.to_json(config_path)
+            rc.to_json(config_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -195,7 +195,7 @@ class ToTomlHelpTests(ExportHelpTestBase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.to_toml(config_path)
+            rc.to_toml(config_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -242,7 +242,7 @@ class ExportFunctionHelpTests(ExportHelpTestBase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.export(config_path, rc.DictExporter())
+            rc.export(config_path, rc.DictExporter(), cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -294,7 +294,7 @@ class ToFileHelpTests(ExportHelpTestBase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.to_file(config_path, output_path)
+            rc.to_file(config_path, output_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -347,7 +347,7 @@ class ToFilesHelpTests(ExportHelpTestBase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.to_files(config_path, output_root)
+            rc.to_files(config_path, output_root, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)
@@ -395,7 +395,7 @@ class ValidateHelpTests(ExportHelpTestBase):
 
         # Act
         with self.assertRaises(SystemExit):
-            rc.validate(config_path)
+            rc.validate(config_path, cli_overrides=True)
 
         # Assert
         self.assertEqual(len(call_log), 1)

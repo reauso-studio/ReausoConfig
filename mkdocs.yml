@@ -1,9 +1,9 @@
 site_name: ReausoConfig
-site_url: https://reauso.github.io/ReausoConfig/
+site_url: https://reauso-studio.github.io/ReausoConfig/
 site_description: A Python configuration library that turns YAML, JSON, and TOML files into Python objects
 site_author: Rene Ebertowski
-repo_name: reauso/ReausoConfig
-repo_url: https://github.com/reauso/ReausoConfig
+repo_name: reauso-studio/ReausoConfig
+repo_url: https://github.com/reauso-studio/ReausoConfig
 edit_uri: edit/main/docs/
 
 theme:
@@ -55,10 +55,12 @@ nav:
       - Object Instantiation: object-instantiation.md
       - Config Composition: composition.md
       - Interpolation & Resolvers: interpolation.md
+      - Type Coercion: type-coercion.md
       - Advanced Features: advanced-features.md
       - Serialization & Export: serialization.md
       - Observability: observability.md
       - Multirun & Hooks: multirun-and-hooks.md
+      - Embedding in Applications: embedding.md
   - Reference:
       - API Reference: api-reference.md
       - Advanced Usage: advanced-usage.md

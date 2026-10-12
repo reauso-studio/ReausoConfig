@@ -1,0 +1,5 @@
+_target_: claims_app
+# Nested section without _target_; its class is not registered
+database:
+  host: localhost
+  port: 5432

@@ -1,0 +1,4 @@
+_target_: embedded_app
+# Application config loaded by a host program (web app, worker, test runner)
+name: '${env:RCT_APP_NAME ?: "app"}'
+port: 8000
