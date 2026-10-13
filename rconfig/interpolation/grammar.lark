@@ -114,7 +114,13 @@ slice: expression ":" expression -> slice_both
 list: "[" [expression ("," expression)*] "]"
 
 // Built-in functions
+// int() and float() exist because an ${env:...} reference is a string inside an
+// expression -- it is converted to the field's declared type only when it is
+// the whole value of a key. So `${env:PORT + 1}` concatenates, and
+// `${int(env:PORT) + 1}` adds.
 builtin_func: "len" "(" expression ")" -> len_func
+            | "int" "(" expression ")" -> int_func
+            | "float" "(" expression ")" -> float_func
 
 // Config path reference
 config_ref: ABS_PATH -> abs_config_ref

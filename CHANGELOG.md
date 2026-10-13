@@ -2,6 +2,30 @@
 
 All notable changes to ReausoConfig are documented here.
 
+## Unreleased
+
+### Fixed
+
+- **`+` no longer stringifies a list or a dict.** A string on either side of
+  `+` builds a string, which is the point of the operator -- `"epoch " + 10` is
+  `"epoch 10"`. But that applied to containers too, so `"a" + ["b"]` silently
+  became the string `"a['b']"`, and no error said so. Mixing a string with a
+  list or a dict now raises `InterpolationResolutionError` naming both types.
+
+  The shape this hid is worth spelling out, because it only misbehaves once a
+  variable is set: `'${(env:HOSTS ?: []) + ["localhost"]}'` yields
+  `["localhost"]` with `HOSTS` unset, and a list of mangled strings once it is.
+  Lists concatenate as before, and so does every other use of `+`.
+
+### Added
+
+- **`int()` and `float()` in expressions.** An `${env:...}` reference is a
+  string wherever it is only part of a larger expression -- it is converted to
+  the declared field type only when it is the whole value of a key -- so
+  `'${(env:WORKERS ?: 2) * 2}'` repeats the string rather than multiplying.
+  `'${int(env:WORKERS ?: 2) * 2}'` does the arithmetic. A value that cannot be
+  converted raises `InterpolationResolutionError` quoting it.
+
 ## 0.2.0
 
 This release makes ReausoConfig behave well as a library embedded in another

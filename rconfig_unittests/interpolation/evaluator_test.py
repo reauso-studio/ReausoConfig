@@ -16,6 +16,7 @@ from rconfig.errors import (
     UnknownResolverError,
     ResolverExecutionError,
     EnvironmentVariableError,
+    InterpolationResolutionError,
 )
 
 
@@ -641,3 +642,154 @@ class EnvRefEvaluatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AddOperatorEvaluatorTests(unittest.TestCase):
+    """Tests for + : addition, list concatenation and string building."""
+
+    def setUp(self) -> None:
+        self.parser = InterpolationParser()
+        self.registry = MagicMock(spec=ResolverRegistry.wrapped_class)
+
+    def _evaluate(self, expression: str, env: dict[str, str] | None = None) -> EvalResult:
+        """Helper to parse and evaluate an expression."""
+        tree = self.parser.parse(expression)
+        evaluator = ExpressionEvaluator(
+            config={},
+            registry=self.registry,
+            env_getter=(env or {}).get,
+        )
+        return evaluator.transform(tree)
+
+    def _assert_raises_resolution_error(self, expression: str, env=None) -> str:
+        """Evaluate and return the message of the resolution error it raises.
+
+        lark wraps a transformer exception in VisitError, so the cause is what
+        carries the library's own error.
+        """
+        with self.assertRaises((VisitError, InterpolationResolutionError)) as caught:
+            self._evaluate(expression, env)
+        error = caught.exception
+        original = getattr(error, "orig_exc", error)
+        self.assertIsInstance(original, InterpolationResolutionError)
+        return str(original)
+
+    def test_add__StringAndList__Raises(self):
+        """A string plus a list used to stringify the list's repr.
+
+        `"a" + ["b"]` produced the string "a['b']", which is not something a
+        config author asks for, and it happened silently.
+        """
+        # Act
+        message = self._assert_raises_resolution_error('"a" + ["b"]')
+
+        # Assert
+        self.assertIn("cannot add str and list", message)
+
+    def test_add__ListAndString__Raises(self):
+        """The same mistake with the operands the other way round."""
+        # Act
+        message = self._assert_raises_resolution_error('["b"] + "a"')
+
+        # Assert
+        self.assertIn("cannot add str and list", message)
+
+    def test_add__EnvStringAndList__Raises(self):
+        """The shape that motivated the fix.
+
+        An env value is a string inside an expression, so appending defaults to
+        a list read from the environment silently produced mangled strings -
+        and only once the variable was set, so it passed in development.
+        """
+        # Act
+        message = self._assert_raises_resolution_error(
+            '(env:HOSTS ?: []) + ["localhost"]', {"HOSTS": "example.com"}
+        )
+
+        # Assert
+        self.assertIn("cannot add str and list", message)
+
+    def test_add__StringAndNumber__BuildsString(self):
+        """Stringifying a scalar is the operator's job, and stays.
+
+        rconfig_integrationtests/config_files/interpolation/complex/
+        all_operations.yaml relies on it.
+        """
+        # Act
+        result = self._evaluate('"epoch " + 100')
+
+        # Assert
+        self.assertEqual(result.value, "epoch 100")
+
+    def test_add__TwoLists__Concatenates(self):
+        # Act
+        result = self._evaluate("[1, 2] + [3]")
+
+        # Assert
+        self.assertEqual(result.value, [1, 2, 3])
+
+    def test_add__TwoNumbers__Adds(self):
+        # Act
+        result = self._evaluate("1 + 2")
+
+        # Assert
+        self.assertEqual(result.value, 3)
+
+
+class CastFunctionEvaluatorTests(unittest.TestCase):
+    """Tests for int() and float(), which give env values a numeric type."""
+
+    def setUp(self) -> None:
+        self.parser = InterpolationParser()
+        self.registry = MagicMock(spec=ResolverRegistry.wrapped_class)
+
+    def _evaluate(self, expression: str, env: dict[str, str] | None = None) -> EvalResult:
+        """Helper to parse and evaluate an expression."""
+        tree = self.parser.parse(expression)
+        evaluator = ExpressionEvaluator(
+            config={},
+            registry=self.registry,
+            env_getter=(env or {}).get,
+        )
+        return evaluator.transform(tree)
+
+    def test_int__EnvValueInArithmetic__Adds(self):
+        """Without the cast this concatenates, because env values are strings.
+
+        An ${env:...} reference is converted to the declared field type only
+        when it is the whole value of a key; inside an expression it is a
+        string, so `env:PORT + 1` builds "90001" rather than adding.
+        """
+        # Act
+        result = self._evaluate("int(env:PORT) + 1", {"PORT": "9000"})
+
+        # Assert
+        self.assertEqual(result.value, 9001)
+        self.assertIsInstance(result.value, int)
+
+    def test_float__EnvValueInArithmetic__Multiplies(self):
+        # Act
+        result = self._evaluate("float(env:RATIO) * 2", {"RATIO": "0.5"})
+
+        # Assert
+        self.assertEqual(result.value, 1.0)
+        self.assertIsInstance(result.value, float)
+
+    def test_int__NonNumericValue__RaisesNamingTheValue(self):
+        """The error has to quote what it could not convert."""
+        # Act
+        with self.assertRaises((VisitError, InterpolationResolutionError)) as caught:
+            self._evaluate("int(env:PORT)", {"PORT": "abc"})
+
+        # Assert
+        error = caught.exception
+        original = getattr(error, "orig_exc", error)
+        self.assertIsInstance(original, InterpolationResolutionError)
+        self.assertIn("'abc'", str(original))
+
+    def test_int__AlreadyANumber__IsUnchanged(self):
+        # Act
+        result = self._evaluate("int(42)")
+
+        # Assert
+        self.assertEqual(result.value, 42)

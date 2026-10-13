@@ -214,11 +214,34 @@ class ExpressionEvaluator(Transformer):
 
     @v_args(inline=True)
     def add(self, left: EvalResult, right: EvalResult) -> EvalResult:
-        """Handle + operator (addition or concatenation)."""
+        """Handle + operator (addition, list concatenation, or string building).
+
+        A string on either side builds a string, so `"epoch " + 10` is
+        `"epoch 10"` -- that is the point of the operator. But only scalars are
+        stringified. Mixing a string with a list or a dict used to produce that
+        container's repr, so `"a" + ["b"]` silently became the string
+        `"a['b']"`, which no config author has ever meant. It raises now.
+        """
+        from rconfig.errors import InterpolationResolutionError
+
         lv, rv = left.value, right.value
         if isinstance(lv, list) and isinstance(rv, list):
             result = lv + rv
         elif isinstance(lv, str) or isinstance(rv, str):
+            container, other = (
+                (lv, rv) if isinstance(lv, (list, dict)) else (rv, lv)
+            )
+            if isinstance(container, (list, dict)):
+                raise InterpolationResolutionError(
+                    f"{left.source.expression} + {right.source.expression}",
+                    f"cannot add {type(other).__name__} and "
+                    f"{type(container).__name__}",
+                    hint=(
+                        "A string plus a list or dict would stringify the "
+                        "container, e.g. 'a' + ['b'] -> \"a['b']\". Concatenate "
+                        "two lists, or build the string from scalars."
+                    ),
+                )
             result = str(lv) + str(rv)
         else:
             result = lv + rv
@@ -567,6 +590,46 @@ class ExpressionEvaluator(Transformer):
                 sources=[target.source],
             ),
         )
+
+    def _cast(self, name: str, cast: Any, target: EvalResult) -> EvalResult:
+        """Apply a named cast to a value, reporting a failure in config terms."""
+        from rconfig.errors import InterpolationResolutionError
+
+        expr = f"{name}({target.source.expression})"
+        try:
+            result = cast(target.value)
+        except (TypeError, ValueError) as error:
+            raise InterpolationResolutionError(
+                expr,
+                f"cannot convert {target.value!r} to {name}",
+                hint=f"{error}",
+            ) from error
+        return EvalResult(
+            value=result,
+            source=InterpolationSource(
+                kind="expression",
+                expression=expr,
+                value=result,
+                operator=f"{name}()",
+                sources=[target.source],
+            ),
+        )
+
+    @v_args(inline=True)
+    def int_func(self, target: EvalResult) -> EvalResult:
+        """Handle int(), which is how an env value joins an arithmetic expression.
+
+        An ${env:...} reference is a string wherever it is only part of a larger
+        expression -- it is converted to the declared field type only when it is
+        the whole value of a key. So `${env:PORT + 1}` builds a string and
+        `${int(env:PORT) + 1}` adds.
+        """
+        return self._cast("int", int, target)
+
+    @v_args(inline=True)
+    def float_func(self, target: EvalResult) -> EvalResult:
+        """Handle float(). See int_func for why these exist."""
+        return self._cast("float", float, target)
 
     @v_args(inline=True)
     def filter_op(
