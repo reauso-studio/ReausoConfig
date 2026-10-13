@@ -138,7 +138,21 @@ Compare the string explicitly instead. The comparison is case-sensitive:
 device: '${(env:USE_GPU ?: "false") == "true" ? "cuda:0" : "cpu"}'
 ```
 
-The same applies to arithmetic: `${(env:WORKERS ?: 2) * 2}` yields `"33"` for `WORKERS=3`, because the string is repeated. A config reference (`${/other_field}`) also returns the other field's value before conversion. When logic depends on a typed environment value, give it its own typed field and derive the rest in Python.
+The same applies to arithmetic: `${(env:WORKERS ?: 2) * 2}` yields `"33"` for `WORKERS=3`, because the string is repeated. A config reference (`${/other_field}`) also returns the other field's value before conversion.
+
+`int()` and `float()` convert explicitly, which is the way to do arithmetic on an environment value in place:
+
+```yaml
+# "33" for WORKERS=3
+workers_doubled: '${(env:WORKERS ?: 2) * 2}'
+
+# 6 for WORKERS=3
+workers_doubled: '${int(env:WORKERS ?: 2) * 2}'
+```
+
+There is no cast to a list, because splitting a string into one is a decision about the separator rather than a conversion. `+` refuses to mix a string with a list or a dict for the same reason — stringifying the container would turn `"a" + ["b"]` into `"a['b']"` — so building a list partly from the environment belongs in a field of its own, derived in Python.
+
+When logic depends on a typed environment value and the expression is doing more than arithmetic, give it its own typed field and derive the rest in Python.
 
 ## Empty Environment Variables
 

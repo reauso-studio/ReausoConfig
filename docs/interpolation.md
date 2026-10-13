@@ -98,6 +98,11 @@ without_first: ${/items.remove(0)}  # [2, 3, 4, 5]
 # Length
 count: ${len(/items)}  # 5
 
+# Numeric casts. Mostly for environment values, which are strings inside an
+# expression - see Type Coercion.
+port: ${int(env:PORT) + 1}
+scaled: ${float(env:RATIO) * 2}
+
 # Membership
 has_gpu: ${"gpu" in /devices}
 ```
